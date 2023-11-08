@@ -1,9 +1,9 @@
 use std::time::{Instant, Duration};
 use std::io;
 use std::process::{Command, Output};
-use reqwest::Client;
 use tokio;
 use tokio::time;
+use reqwest::Client;
 
 
 // measure bandwidth
@@ -11,7 +11,7 @@ async fn measure_bandwidth() -> Option<(u64, u64)> {
     let client = Client::new();
     let start_time = Instant::now();
 
-    // Simulate a download process
+    // simulate a download process
     let download_url = "https://www.strem.io/download?four=4";
     let response = match client.get(download_url).send().await {
         Ok(response) => response,
@@ -58,7 +58,7 @@ fn measure_latency(target_host: &str) -> Option<Duration> {
         .expect("Oops! Failed to execute the ping command");
 
     if output.status.success() {
-        // Parse output to extract latency
+        // parse output to extract latency
         let output_str = String::from_utf8_lossy(&output.stdout);
 
         if let Some(latency) = extract_latency_from_ping_output(&output_str) {
@@ -86,6 +86,50 @@ fn extract_latency_from_ping_output(output: &str) -> Option<Duration> {
     None
 }
 
+// measure packet loss
+async fn measure_packet_loss(target_host: &str) -> Option<f64> {
+    let packet_count = 10; // Number of packets to send
+
+    let ping_command = match cfg!(target_os = "windows") {
+        true => format!("ping -n {}", packet_count),
+        false => format!("ping -c {}", packet_count),
+    };
+
+    let output: Output = Command::new("sh")
+        .arg("-c")
+        .arg(format!("{} {}", ping_command, target_host))
+        .output()
+        .expect("Oops! Failed to execute the ping command");
+
+    if output.status.success() {
+        // Parse output to extract packet loss percentage
+        let output_str = String::from_utf8_lossy(&output.stdout);
+
+        if let Some(packet_loss) = extract_packet_loss_from_ping_output(&output_str) {
+            return Some(packet_loss);
+        }
+    }
+
+    None
+}
+
+// extract packet loss from the ping's output
+fn extract_packet_loss_from_ping_output(output: &str) -> Option<f64> {
+    let lines: Vec<&str> = output.lines().collect();
+    for line in lines {
+        if line.contains("packet loss") {
+            if let Some(loss_start) = line.find("received, ") {
+                let loss_end = line[loss_start + 10..].find("%").unwrap_or(line.len());
+                let loss_str = &line[loss_start + 10..loss_start + 10 + loss_end];
+                if let Ok(packet_loss) = loss_str.parse::<f64>() {
+                    return Some(packet_loss);
+                }
+            }
+        }
+    }
+    None
+}
+
 #[tokio::main]
 async fn main() {
     println!("Welcome to PantheonProbe!");
@@ -103,6 +147,13 @@ async fn main() {
         println!("The latency to {} is {:?}", target_host, latency);
     } else {
         println!("Oops! Failed to measure the latency.");
+    }
+
+    // measure packet loss
+    if let Some(packet_loss) = measure_packet_loss(target_host).await {
+        println!("Packet Loss: {}%", packet_loss);
+    } else {
+        println!("Failed to measure packet loss.");
     }
 
     // measure bandwidth
