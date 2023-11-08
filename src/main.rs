@@ -1,10 +1,9 @@
-use std::time::{Instant, Duration};
+use reqwest::Client;
 use std::io;
 use std::process::{Command, Output};
+use std::time::{Duration, Instant};
 use tokio;
 use tokio::time;
-use reqwest::Client;
-
 
 // measure bandwidth
 async fn measure_bandwidth() -> Option<(u64, u64)> {
@@ -12,7 +11,8 @@ async fn measure_bandwidth() -> Option<(u64, u64)> {
     let start_time = Instant::now();
 
     // simulate a download process
-    let download_url = "https://www.strem.io/download?four=4";
+    let download_url =
+        "https://drive.google.com/uc?id=1ie1FhaN5ZzwCqc8E0Mz8hS_x9LYMRCk5&export=download";
     let response = match client.get(download_url).send().await {
         Ok(response) => response,
         Err(_) => return None,
@@ -22,12 +22,9 @@ async fn measure_bandwidth() -> Option<(u64, u64)> {
         Err(_) => return None,
     };
 
-    // simulate an upload process 
+    // simulate an upload process
     let upload_url = "https://example.com/upload_endpoint";
-    let response = match client.post(upload_url)
-        .body(Vec::new())
-        .send()
-        .await {
+    let response = match client.post(upload_url).body(Vec::new()).send().await {
         Ok(response) => response,
         Err(_) => return None,
     };
@@ -38,11 +35,10 @@ async fn measure_bandwidth() -> Option<(u64, u64)> {
     // calculate download and upload speeds in Mbps
     let elapsed_time = end_time.duration_since(start_time).as_secs_f64();
     let download_speed = (download_size as f64 / elapsed_time) * 8.0 / 1_000_000.0; // Mbps
-    let upload_speed = (upload_size as f64 / elapsed_time) * 8.0 / 1_000_000.0;     // Mbps
+    let upload_speed = (upload_size as f64 / elapsed_time) * 8.0 / 1_000_000.0; // Mbps
 
     Some((download_speed as u64, upload_speed as u64))
 }
-
 
 // measure latency
 fn measure_latency(target_host: &str) -> Option<Duration> {
@@ -88,7 +84,7 @@ fn extract_latency_from_ping_output(output: &str) -> Option<Duration> {
 
 // measure packet loss
 async fn measure_packet_loss(target_host: &str) -> Option<f64> {
-    let packet_count = 10; // Number of packets to send
+    let packet_count = 10; // number of packets to send
 
     let ping_command = match cfg!(target_os = "windows") {
         true => format!("ping -n {}", packet_count),
@@ -102,7 +98,7 @@ async fn measure_packet_loss(target_host: &str) -> Option<f64> {
         .expect("Oops! Failed to execute the ping command");
 
     if output.status.success() {
-        // Parse output to extract packet loss percentage
+        // parse output to extract packet loss percentage
         let output_str = String::from_utf8_lossy(&output.stdout);
 
         if let Some(packet_loss) = extract_packet_loss_from_ping_output(&output_str) {
@@ -130,6 +126,35 @@ fn extract_packet_loss_from_ping_output(output: &str) -> Option<f64> {
     None
 }
 
+// measure jitter
+fn measure_jitter(target_host: &str) -> Option<f64> {
+    let mut previous_latency: Option<Duration> = None;
+    let mut jitter_sum: f64 = 0.0;
+    let mut packet_count = 0;
+
+    // measure latency for a certain number of packets
+    for _ in 0..10 {
+        if let Some(latency) = measure_latency(target_host) {
+            if let Some(previous) = previous_latency {
+                if let Some(latency_diff) = latency.checked_sub(previous) {
+                    let latency_diff_ms = latency_diff.as_secs_f64() * 1000.0;
+                    jitter_sum += latency_diff_ms;
+                    packet_count += 1;
+                }
+            }
+            previous_latency = Some(latency);
+        }
+    }
+
+    // compute average jitter
+    if packet_count > 0 {
+        let average_jitter = jitter_sum / packet_count as f64;
+        Some(average_jitter)
+    } else {
+        None
+    }
+}
+
 #[tokio::main]
 async fn main() {
     println!("Welcome to PantheonProbe!");
@@ -137,7 +162,9 @@ async fn main() {
     // prompt user for their desired target host
     let mut target_host = String::new();
     println!("Enter your desired target host or IP address:");
-    io::stdin().read_line(&mut target_host).expect("Failed to read line");
+    io::stdin()
+        .read_line(&mut target_host)
+        .expect("Failed to read line");
 
     // trim trailing newline
     let target_host = target_host.trim();
@@ -154,6 +181,13 @@ async fn main() {
         println!("Packet Loss: {}%", packet_loss);
     } else {
         println!("Failed to measure packet loss.");
+    }
+
+    // measure jitter
+    if let Some(jitter) = measure_jitter(target_host) {
+        println!("Jitter: {} ms", jitter);
+    } else {
+        println!("Failed to measure jitter.");
     }
 
     // measure bandwidth
