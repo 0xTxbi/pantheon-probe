@@ -1,3 +1,4 @@
+use clap::{App, Arg};
 use reqwest::Client;
 use std::io;
 use std::process::{Command, Output};
@@ -157,14 +158,30 @@ fn measure_jitter(target_host: &str) -> Option<f64> {
 
 #[tokio::main]
 async fn main() {
-    println!("Welcome to PantheonProbe!");
+    // define cli options
+    let matches = App::new("PantheonProbe")
+        .arg(
+            Arg::with_name("target")
+                .short("t")
+                .long("target")
+                .value_name("HOST")
+                .help("Sets the target host or IP address")
+                .takes_value(true),
+        )
+        .get_matches();
 
-    // prompt user for their desired target host
-    let mut target_host = String::new();
-    println!("Enter your desired target host or IP address:");
-    io::stdin()
-        .read_line(&mut target_host)
-        .expect("Failed to read line");
+    // utilise provided target or prompt the user
+    let target_host = matches
+        .value_of("target")
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| {
+            let mut target = String::new();
+            println!("Enter your desired target host or IP address:");
+            io::stdin()
+                .read_line(&mut target)
+                .expect("Oops! Failed to read line");
+            target.trim().to_string()
+        });
 
     // trim trailing newline
     let target_host = target_host.trim();
