@@ -168,6 +168,14 @@ async fn main() {
                 .help("Sets the target host or IP address")
                 .takes_value(true),
         )
+        .arg(
+            Arg::with_name("interval")
+                .short("i")
+                .long("interval")
+                .value_name("SECONDS")
+                .help("Sets the testing interval in seconds")
+                .takes_value(true),
+        )
         .get_matches();
 
     // utilise provided target or prompt the user
@@ -186,35 +194,54 @@ async fn main() {
     // trim trailing newline
     let target_host = target_host.trim();
 
-    // measure latency
-    if let Some(latency) = measure_latency(target_host) {
-        println!("The latency to {} is {:?}", target_host, latency);
-    } else {
-        println!("Oops! Failed to measure the latency.");
-    }
+    // get the testing interval from command-line options or use a default value
+    let interval = matches
+        .value_of("interval")
+        .and_then(|s| s.parse::<u64>().ok())
+        .unwrap_or(10); // default interval of 10 seconds
 
-    // measure packet loss
-    if let Some(packet_loss) = measure_packet_loss(target_host).await {
-        println!("Packet Loss: {}%", packet_loss);
-    } else {
-        println!("Failed to measure packet loss.");
-    }
+    loop {
+        // measure latency
+        if let Some(latency) = measure_latency(&target_host) {
+            println!("The latency to {} is {:?}", target_host, latency);
+        } else {
+            println!("Oops! Failed to measure the latency.");
+        }
 
-    // measure jitter
-    if let Some(jitter) = measure_jitter(target_host) {
-        println!("Jitter: {} ms", jitter);
-    } else {
-        println!("Failed to measure jitter.");
-    }
+        // measure packet loss
+        if let Some(packet_loss) = measure_packet_loss(&target_host).await {
+            println!("Packet Loss: {}%", packet_loss);
+        } else {
+            println!("Failed to measure packet loss.");
+        }
 
-    // measure bandwidth
-    if let Some((download, upload)) = measure_bandwidth().await {
-        println!("Download Speed: {} Mbps", download);
-        println!("Upload Speed: {} Mbps", upload);
-    } else {
-        println!("Failed to measure bandwidth.");
-    }
+        // measure jitter
+        if let Some(jitter) = measure_jitter(&target_host) {
+            println!("Jitter: {} ms", jitter);
+        } else {
+            println!("Failed to measure jitter.");
+        }
 
-    // sleep for a while to give time for the asynchronous task to complete
-    time::sleep(Duration::from_secs(2)).await;
+        // measure bandwidth
+        if let Some((download, upload)) = measure_bandwidth().await {
+            println!("Download Speed: {} Mbps", download);
+            println!("Upload Speed: {} Mbps", upload);
+        } else {
+            println!("Failed to measure bandwidth.");
+        }
+
+        // sleep for the specified interval
+        time::sleep(Duration::from_secs(interval)).await;
+
+        // prompt the user to continue or not
+        println!("Do you wish to continue? (y/n)");
+        let mut input = String::new();
+        io::stdin()
+            .read_line(&mut input)
+            .expect("Oops! Failed to read line");
+        let input = input.trim().to_lowercase();
+        if input != "y" && input != "yes" {
+            break;
+        }
+    }
 }
