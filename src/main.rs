@@ -1,7 +1,50 @@
 use std::time::{Instant, Duration};
 use std::io;
 use std::process::{Command, Output};
+use reqwest::Client;
+use tokio;
+use tokio::time;
 
+
+// measure bandwidth
+async fn measure_bandwidth() -> Option<(u64, u64)> {
+    let client = Client::new();
+    let start_time = Instant::now();
+
+    // Simulate a download process
+    let download_url = "https://www.strem.io/download?four=4";
+    let response = match client.get(download_url).send().await {
+        Ok(response) => response,
+        Err(_) => return None,
+    };
+    let download_size = match response.bytes().await {
+        Ok(bytes) => bytes.len() as u64,
+        Err(_) => return None,
+    };
+
+    // simulate an upload process 
+    let upload_url = "https://example.com/upload_endpoint";
+    let response = match client.post(upload_url)
+        .body(Vec::new())
+        .send()
+        .await {
+        Ok(response) => response,
+        Err(_) => return None,
+    };
+    let upload_size = response.content_length().unwrap_or_default();
+
+    let end_time = Instant::now();
+
+    // calculate download and upload speeds in Mbps
+    let elapsed_time = end_time.duration_since(start_time).as_secs_f64();
+    let download_speed = (download_size as f64 / elapsed_time) * 8.0 / 1_000_000.0; // Mbps
+    let upload_speed = (upload_size as f64 / elapsed_time) * 8.0 / 1_000_000.0;     // Mbps
+
+    Some((download_speed as u64, upload_speed as u64))
+}
+
+
+// measure latency
 fn measure_latency(target_host: &str) -> Option<Duration> {
     let ping_command = match cfg!(target_os = "windows") {
         true => "ping -n 1",
@@ -26,7 +69,7 @@ fn measure_latency(target_host: &str) -> Option<Duration> {
     None
 }
 
-// Extract latency from the ping's output
+// extract latency from the ping's output
 fn extract_latency_from_ping_output(output: &str) -> Option<Duration> {
     let lines: Vec<&str> = output.lines().collect();
     for line in lines {
@@ -43,7 +86,8 @@ fn extract_latency_from_ping_output(output: &str) -> Option<Duration> {
     None
 }
 
-fn main() {
+#[tokio::main]
+async fn main() {
     println!("Welcome to PantheonProbe!");
 
     // prompt user for their desired target host
@@ -60,4 +104,15 @@ fn main() {
     } else {
         println!("Oops! Failed to measure the latency.");
     }
+
+    // measure bandwidth
+    if let Some((download, upload)) = measure_bandwidth().await {
+        println!("Download Speed: {} Mbps", download);
+        println!("Upload Speed: {} Mbps", upload);
+    } else {
+        println!("Failed to measure bandwidth.");
+    }
+
+    // sleep for a while to give time for the asynchronous task to complete
+    time::sleep(Duration::from_secs(2)).await;
 }
