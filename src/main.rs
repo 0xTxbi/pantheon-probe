@@ -3,6 +3,7 @@ use figlet_rs::FIGfont;
 use futures::StreamExt;
 use indicatif::{ProgressBar, ProgressStyle};
 use reqwest::Client;
+use std::fs;
 use std::io;
 use std::process::{Command, Output};
 use std::time::{Duration, Instant};
@@ -240,10 +241,20 @@ fn measure_jitter(target_host: &str) -> Option<f64> {
 
 #[tokio::main]
 async fn main() {
+    // implement versioning
+    // read from version file
+    let version_string = fs::read_to_string("VERSION")
+        .expect("Failed to read VERSION file")
+        .trim()
+        .to_string();
+
+    let version = semver::Version::parse(&version_string).expect("Failed to parse version");
+
     let standard_font = FIGfont::standard().unwrap();
     let figure = standard_font.convert("PantheonProbe");
     assert!(figure.is_some());
     println!("{}", figure.unwrap());
+    println!("Current version: {} \n", version);
 
     // define cli options
     let matches = App::new("PantheonProbe")
