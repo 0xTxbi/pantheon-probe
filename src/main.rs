@@ -1,4 +1,5 @@
 use clap::{App, Arg};
+use figlet_rs::FIGfont;
 use futures::StreamExt;
 use indicatif::{ProgressBar, ProgressStyle};
 use reqwest::Client;
@@ -239,6 +240,11 @@ fn measure_jitter(target_host: &str) -> Option<f64> {
 
 #[tokio::main]
 async fn main() {
+    let standard_font = FIGfont::standard().unwrap();
+    let figure = standard_font.convert("PantheonProbe");
+    assert!(figure.is_some());
+    println!("{}", figure.unwrap());
+
     // define cli options
     let matches = App::new("PantheonProbe")
         .arg(
