@@ -10,7 +10,8 @@ use std::time::{Duration, Instant};
 use tokio;
 use tokio::time;
 
-// measure bandwidth
+/// measure bandwidth by simulating a download and upload process.
+/// returns a tuple containing download and upload speeds in mbps.
 async fn measure_bandwidth() -> Option<(u64, u64)> {
     println!("Measuring bandwidth");
 
@@ -60,7 +61,8 @@ async fn measure_bandwidth() -> Option<(u64, u64)> {
     Some((download_speed as u64, upload_speed as u64))
 }
 
-// measure latency
+/// measure latency to a target host using the ping command.
+/// returns the measured latency as a duration.
 fn measure_latency(target_host: &str) -> Option<Duration> {
     let ping_command = match cfg!(target_os = "windows") {
         true => "ping -n 1",
@@ -108,7 +110,8 @@ fn measure_latency(target_host: &str) -> Option<Duration> {
     None
 }
 
-// extract latency from the ping's output
+/// measure latency to a target host using the ping command.
+/// returns the measured latency as a duration.
 fn extract_latency_from_ping_output(output: &str) -> Option<Duration> {
     let lines: Vec<&str> = output.lines().collect();
     for line in lines {
@@ -125,7 +128,8 @@ fn extract_latency_from_ping_output(output: &str) -> Option<Duration> {
     None
 }
 
-// measure packet loss
+/// measure packet loss to a target host using the ping command.
+/// returns the measured packet loss percentage.
 async fn measure_packet_loss(target_host: &str) -> Option<f64> {
     println!("Calculating packet loss");
 
@@ -175,7 +179,8 @@ async fn measure_packet_loss(target_host: &str) -> Option<f64> {
     None
 }
 
-// extract packet loss from the ping's output
+/// extract packet loss from the ping command's output.
+/// returns the measured packet loss percentage.
 fn extract_packet_loss_from_ping_output(output: &str) -> Option<f64> {
     let lines: Vec<&str> = output.lines().collect();
     for line in lines {
@@ -192,7 +197,8 @@ fn extract_packet_loss_from_ping_output(output: &str) -> Option<f64> {
     None
 }
 
-// measure jitter
+/// measure jitter by calculating the difference in latency over a series of measurements.
+/// returns the average jitter in milliseconds.
 fn measure_jitter(target_host: &str) -> Option<f64> {
     println!("Calculating jitter");
 
@@ -263,7 +269,7 @@ async fn main() {
                 .short("t")
                 .long("target")
                 .value_name("HOST")
-                .help("Sets the target host or IP address")
+                .help("Sets the target host or IP addsress")
                 .takes_value(true),
         )
         .arg(
