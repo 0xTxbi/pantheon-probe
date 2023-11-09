@@ -1,54 +1,107 @@
-# PantheonProbe
+# PantheonProbe 🛰️
 
-PantheonProbe is a state-of-the-art CLI tool, meticulously crafted in Rust,
-designed to provide in-depth insights into network performance metrics. Whether
-you're a seasoned network administrator or an enthusiast looking to optimize
-your network, PantheonProbe empowers you with real-time analysis and reporting
-capabilities.
+[![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-## Features
+PantheonProbe is a network diagnostic tool that provides comprehensive insights
+into your network performance. It's designed to help you measure latency, packet
+loss, jitter, and bandwidth with ease.
 
-- **Comprehensive Metrics**: Gain valuable insights into critical network
-  parameters, including quality of service, bandwidth utilization, latency, and
-  more.
-- **Real-Time Assessment**: Conduct on-the-fly assessments to make informed
-  decisions about network optimization and troubleshoot potential issues.
-- **Open Source**: PantheonProbe is an open-source project, fostering
-  collaboration and transparency within the tech community.
-- **Modular and Extensible**: Its modular design and extensible architecture
-  allow for easy customization and contributions from the community.
+---
 
-## Getting Started
+## Table of Contents
 
-### Prerequisites
+- [PantheonProbe 🛰️](#pantheonprobe-️)
+     - [Table of Contents](#table-of-contents)
+     - [1. Installation ](#1-installation-)
+     - [2. Usage ](#2-usage-)
+          - [Options ](#options-)
+          - [Examples ](#examples-)
+     - [3. Network Metrics ](#3-network-metrics-)
+          - [Latency ⏱️](#latency-️)
+          - [Packet Loss 📦 🚫](#packet-loss--)
+          - [Jitter 🌊](#jitter-)
+          - [Bandwidth 🌐](#bandwidth-)
+     - [5. Reporting Issues ](#5-reporting-issues-)
+     - [6. License ](#6-license-)
 
-- [in progress 🚧]
+---
 
-### Installation
+## 1. Installation <a name="installation"></a>
 
-To install PantheonProbe, run the following command:
+To install PantheonProbe, use the Rust package manager, Cargo:
 
-```bash
-- [in progress 🚧]
+```sh
+cargo install pantheon-probe
 ```
 
-### Usage
+This command will download and compile the tool, making it ready for use.
 
-To launch PantheonProbe and start analyzing your network, use the following
-command:
+---
 
-```bash
-- [in progress 🚧]
-```
+## 2. Usage <a name="usage"></a>
 
-## Contributing
+PantheonProbe provides a range of options to customize and fine-tune network
+measurements.
 
-- [in progress 🚧]
+### Options <a name="options"></a>
 
-## License
+- `-t, --target <HOST>`: Specifies the target host or IP address for testing.
+- `-i, --interval <SECONDS>`: Sets the testing interval in seconds (default is
+  10 seconds).
 
-This project is licensed under the [MIT License](LICENSE).
+### Examples <a name="examples"></a>
 
-## Acknowledgements
+1. Measure network metrics for a specific host:
 
-- [in progress 🚧]
+      ```sh
+      pantheon-probe -t example.com
+      ```
+
+2. Measure network metrics with a custom interval:
+
+      ```sh
+      pantheon-probe -t example.com -i 7
+      ```
+
+---
+
+## 3. Network Metrics <a name="network-metrics"></a>
+
+PantheonProbe provides the following network metrics:
+
+### Latency ⏱️<a name="latency"></a>
+
+Latency measures the time taken for a packet to travel from the source to the
+destination and back. It is an essential metric for assessing the responsiveness
+of a network connection.
+
+### Packet Loss 📦 🚫<a name="packet-loss"></a>
+
+Packet loss quantifies the percentage of packets that fail to reach their
+destination. High packet loss can indicate network congestion or instability.
+
+### Jitter 🌊<a name="jitter"></a>
+
+Jitter measures the variability in packet arrival times. A low jitter value
+indicates a stable network connection, while high jitter can lead to
+inconsistent performance.
+
+### Bandwidth 🌐<a name="bandwidth"></a>
+
+Bandwidth measures the maximum data transfer rate between two points in a
+network. It is crucial for determining the capacity of a network connection.
+
+---
+
+## 5. Reporting Issues <a name="reporting-issues"></a>
+
+If you encounter any issues or have suggestions for improvement, please
+[open an issue on GitHub](https://github.com/0xTxbi/pantheon-probe/issues).
+
+---
+
+## 6. License <a name="license"></a>
+
+This tool is licensed under the MIT License. See the
+[LICENSE](https://github.com/0xTxbi/pantheon-probe/blob/main/LICENSE) file for
+details.
