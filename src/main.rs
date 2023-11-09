@@ -1,4 +1,6 @@
 use clap::{App, Arg};
+use futures::StreamExt;
+use indicatif::{ProgressBar, ProgressStyle};
 use reqwest::Client;
 use std::io;
 use std::process::{Command, Output};
@@ -8,20 +10,33 @@ use tokio::time;
 
 // measure bandwidth
 async fn measure_bandwidth() -> Option<(u64, u64)> {
-    let client = Client::new();
+    println!("Measuring bandwidth");
+
+    let client = reqwest::Client::new();
     let start_time = Instant::now();
+
+    // // instantiate new progress bar with an arbitrary initial length
+    let pb = ProgressBar::new(100);
+    pb.set_style(ProgressStyle::default_bar()
+        .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {bytes}/{total_bytes} ({eta})")
+        .progress_chars("#>-"));
 
     // simulate a download process
     let download_url =
         "https://drive.google.com/uc?id=1ie1FhaN5ZzwCqc8E0Mz8hS_x9LYMRCk5&export=download";
-    let response = match client.get(download_url).send().await {
+    let mut response = match client.get(download_url).send().await {
         Ok(response) => response,
         Err(_) => return None,
     };
-    let download_size = match response.bytes().await {
-        Ok(bytes) => bytes.len() as u64,
-        Err(_) => return None,
-    };
+
+    let total_size = response.content_length().unwrap_or_default();
+    pb.set_length(total_size);
+
+    let mut download_size = 0u64;
+    while let Some(chunk) = response.chunk().await.unwrap_or_default() {
+        download_size += chunk.len() as u64;
+        pb.set_position(download_size);
+    }
 
     // simulate an upload process
     let upload_url = "https://example.com/upload_endpoint";
@@ -30,6 +45,8 @@ async fn measure_bandwidth() -> Option<(u64, u64)> {
         Err(_) => return None,
     };
     let upload_size = response.content_length().unwrap_or_default();
+
+    pb.finish_with_message("Download complete!");
 
     let end_time = Instant::now();
 
@@ -48,21 +65,44 @@ fn measure_latency(target_host: &str) -> Option<Duration> {
         false => "ping -c 1",
     };
 
+    // instantiate new progress bar
+    let pb = ProgressBar::new(100);
+    pb.set_style(
+        ProgressStyle::default_bar()
+            .template(
+                "{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({eta})",
+            )
+            .progress_chars("#>-"),
+    );
+
+    pb.set_message("Starting latency measurement...");
+    pb.inc(25); // Increment the progress bar by 25% after starting
+
     let output: Output = Command::new("sh")
         .arg("-c")
         .arg(format!("{} {}", ping_command, target_host))
         .output()
         .expect("Oops! Failed to execute the ping command");
 
+    pb.set_message("Ping command executed...");
+    pb.inc(25); // Increment the progress bar by 25% after executing the ping command
+
     if output.status.success() {
         // parse output to extract latency
         let output_str = String::from_utf8_lossy(&output.stdout);
 
+        pb.set_message("Parsing ping output...");
+        pb.inc(25); // Increment the progress bar by 25% after parsing the output
+
         if let Some(latency) = extract_latency_from_ping_output(&output_str) {
+            pb.set_message("Latency measurement complete!");
+            pb.inc(25); // Increment the progress bar by 25% after completing the measurement
+            pb.finish();
             return Some(latency);
         }
     }
 
+    pb.finish_with_message("Failed to measure latency.");
     None
 }
 
@@ -85,6 +125,8 @@ fn extract_latency_from_ping_output(output: &str) -> Option<Duration> {
 
 // measure packet loss
 async fn measure_packet_loss(target_host: &str) -> Option<f64> {
+    println!("Calculating packet loss");
+
     let packet_count = 10; // number of packets to send
 
     let ping_command = match cfg!(target_os = "windows") {
@@ -92,21 +134,42 @@ async fn measure_packet_loss(target_host: &str) -> Option<f64> {
         false => format!("ping -c {}", packet_count),
     };
 
+    // instantiate new progress bar
+    let pb = ProgressBar::new(100);
+    pb.set_style(
+        ProgressStyle::default_bar()
+            .template(
+                "{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({eta})",
+            )
+            .progress_chars("#>-"),
+    );
+
+    pb.set_message("Starting packet loss measurement...");
+    pb.inc(33); // Increment the progress bar by 33% after starting
+
     let output: Output = Command::new("sh")
         .arg("-c")
         .arg(format!("{} {}", ping_command, target_host))
         .output()
         .expect("Oops! Failed to execute the ping command");
 
+    pb.set_message("Ping command executed...");
+    pb.inc(33); // Increment the progress bar by 33% after executing the ping command
+
     if output.status.success() {
         // parse output to extract packet loss percentage
         let output_str = String::from_utf8_lossy(&output.stdout);
 
+        pb.set_message("Parsing ping output...");
+        pb.inc(34); // Increment the progress bar by 34% after parsing the output
+
         if let Some(packet_loss) = extract_packet_loss_from_ping_output(&output_str) {
+            pb.finish_with_message("Packet loss measurement complete!");
             return Some(packet_loss);
         }
     }
 
+    pb.finish_with_message("Failed to measure packet loss.");
     None
 }
 
@@ -129,13 +192,29 @@ fn extract_packet_loss_from_ping_output(output: &str) -> Option<f64> {
 
 // measure jitter
 fn measure_jitter(target_host: &str) -> Option<f64> {
+    println!("Calculating jitter");
+
     let mut previous_latency: Option<Duration> = None;
     let mut jitter_sum: f64 = 0.0;
     let mut packet_count = 0;
 
+    // instantiate new progress bar
+    let pb = ProgressBar::new(100);
+    pb.set_style(
+        ProgressStyle::default_bar()
+            .template(
+                "{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({eta})",
+            )
+            .progress_chars("#>-"),
+    );
+
+    pb.set_message("Starting jitter measurement...");
+    pb.inc(10); // Increment the progress bar by 10% after starting
+
     // measure latency for a certain number of packets
     for _ in 0..10 {
         if let Some(latency) = measure_latency(target_host) {
+            pb.inc(10); // Increment the progress bar by 10% after each latency measurement
             if let Some(previous) = previous_latency {
                 if let Some(latency_diff) = latency.checked_sub(previous) {
                     let latency_diff_ms = latency_diff.as_secs_f64() * 1000.0;
@@ -150,8 +229,10 @@ fn measure_jitter(target_host: &str) -> Option<f64> {
     // compute average jitter
     if packet_count > 0 {
         let average_jitter = jitter_sum / packet_count as f64;
+        pb.finish_with_message("Jitter measurement complete!");
         Some(average_jitter)
     } else {
+        pb.finish_with_message("Failed to measure jitter.");
         None
     }
 }
