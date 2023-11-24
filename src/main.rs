@@ -1,3 +1,5 @@
+mod version;
+
 use clap::{App, Arg};
 use figlet_rs::FIGfont;
 use futures::StreamExt;
@@ -5,6 +7,7 @@ use indicatif::{ProgressBar, ProgressStyle};
 use reqwest::Client;
 use std::fs;
 use std::io;
+use std::net::{IpAddr, Ipv4Addr, SocketAddr, ToSocketAddrs};
 use std::process::{Command, Output};
 use std::time::{Duration, Instant};
 use tokio;
@@ -245,22 +248,47 @@ fn measure_jitter(target_host: &str) -> Option<f64> {
     }
 }
 
+// measure dns resolution time
+// returns time taken to resolve the target host's domain name to an IP address
+fn measure_dns_resolution_time(host: &str) -> Option<Duration> {
+    println!("Measuring DNS Resolution Time for {}", host);
+
+    let start_time = Instant::now();
+
+    // attempt resolving the hostname to IP addresses
+    let ips: Vec<_> = match host.parse::<IpAddr>() {
+        Ok(ip) => vec![ip],
+        Err(_) => match host.parse::<Ipv4Addr>() {
+            Ok(ipv4) => vec![IpAddr::V4(ipv4)],
+            Err(_) => match (host, 0).to_socket_addrs() {
+                Ok(addrs) => addrs.map(|a| a.ip()).collect(),
+                Err(err) => {
+                    eprintln!("Error resolving {}: {}", host, err);
+                    return None;
+                }
+            },
+        },
+    };
+
+    let end_time = Instant::now();
+    let elapsed_time = end_time.duration_since(start_time);
+
+    if ips.is_empty() {
+        eprintln!("Failed to resolve IP address for {}", host);
+        None
+    } else {
+        println!("DNS Resolution Time for {}: {:?}", host, elapsed_time);
+        Some(elapsed_time)
+    }
+}
+
 #[tokio::main]
 async fn main() {
-    // implement versioning
-    // read from version file
-    let version_string = fs::read_to_string("VERSION")
-        .expect("Failed to read VERSION file")
-        .trim()
-        .to_string();
-
-    let version = semver::Version::parse(&version_string).expect("Failed to parse version");
-
     let standard_font = FIGfont::standard().unwrap();
     let figure = standard_font.convert("PantheonProbe");
     assert!(figure.is_some());
     println!("{}", figure.unwrap());
-    println!("Current version: {} \n", version);
+    println!("Pantheon Probe v{}", version::VERSION);
 
     // define cli options
     let matches = App::new("PantheonProbe")
@@ -310,6 +338,13 @@ async fn main() {
             println!("The latency to {} is {:?}", target_host, latency);
         } else {
             println!("Oops! Failed to measure the latency.");
+        }
+
+        // measure dns resolution time
+        if let Some(resolution_time) = measure_dns_resolution_time(&target_host) {
+            println!("DNS Resolution Time: {:?}", resolution_time);
+        } else {
+            eprintln!("Failed to measure DNS Resolution Time for {}", &target_host);
         }
 
         // measure packet loss
