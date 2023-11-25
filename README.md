@@ -21,6 +21,7 @@ loss, jitter, and bandwidth with ease.
           - [Packet Loss 📦 🚫](#packet-loss--)
           - [Jitter 🌊](#jitter-)
           - [Bandwidth 🌐](#bandwidth-)
+          - [DNS Resolution Time 🕒](#dns-resolution-time-)
      - [5. Reporting Issues ](#5-reporting-issues-)
      - [6. License ](#6-license-)
 
@@ -46,8 +47,6 @@ measurements.
 ### Options <a name="options"></a>
 
 - `-t, --target <HOST>`: Specifies the target host or IP address for testing.
-- `-i, --interval <SECONDS>`: Sets the testing interval in seconds (default is
-  10 seconds).
 
 ### Examples <a name="examples"></a>
 
@@ -55,12 +54,6 @@ measurements.
 
       ```sh
       pantheon-probe -t example.com
-      ```
-
-2. Measure network metrics with a custom interval:
-
-      ```sh
-      pantheon-probe -t example.com -i 7
       ```
 
 ---
@@ -90,6 +83,12 @@ inconsistent performance.
 
 Bandwidth measures the maximum data transfer rate between two points in a
 network. It is crucial for determining the capacity of a network connection.
+
+### DNS Resolution Time 🕒<a name="dns-resolution-time"></a>
+
+DNS Resolution Time measures the time taken to resolve the target host's domain
+name to an IP address. This metric is important for understanding the efficiency
+of DNS resolution in your network.
 
 ---
 
