@@ -1,7 +1,6 @@
 use indicatif::{ProgressBar, ProgressStyle};
 use reqwest::Client;
-use std::time::{Duration, Instant};
-use tokio::time;
+use std::time::Instant;
 
 /// measure bandwidth by simulating a download and upload process.
 /// returns a tuple containing download and upload speeds in mbps.

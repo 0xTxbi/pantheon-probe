@@ -4,7 +4,6 @@ mod dns_resolution_time;
 mod jitter;
 mod latency;
 mod packet_loss;
-mod utils;
 mod version;
 
 #[tokio::main]

@@ -1,5 +1,4 @@
 use clap::{App, Arg};
-use std::io;
 
 /// struct to hold CLI arguments.
 pub struct CliArgs {

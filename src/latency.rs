@@ -1,6 +1,6 @@
 use indicatif::{ProgressBar, ProgressStyle};
 use std::process::{Command, Output};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 /// measure latency to a target host using the ping command.
 /// returns the measured latency as a duration.
