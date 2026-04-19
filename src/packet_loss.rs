@@ -1,7 +1,5 @@
 use indicatif::{ProgressBar, ProgressStyle};
 use std::process::{Command, Output};
-use std::time::Duration;
-use tokio;
 
 /// measure packet loss to a target host using the ping command.
 /// returns the measured packet loss percentage.
