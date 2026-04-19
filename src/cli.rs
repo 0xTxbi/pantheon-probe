@@ -1,45 +1,81 @@
-use clap::{App, Arg};
+use clap::{Args, Parser, Subcommand};
 
-/// struct to hold CLI arguments.
-pub struct CliArgs {
-    pub target_host: String,
+use crate::probe::{BandwidthConfig, ProbeOptions};
+
+const DEFAULT_INTERVAL_SECONDS: u64 = 15;
+const DEFAULT_SAMPLE_COUNT: u32 = 5;
+const DEFAULT_DOWNLOAD_URL: &str = "https://speed.cloudflare.com/__down?bytes=4000000";
+const DEFAULT_UPLOAD_URL: &str = "https://speed.cloudflare.com/__up";
+const DEFAULT_UPLOAD_SIZE_BYTES: usize = 1_000_000;
+
+#[derive(Debug, Parser)]
+#[command(
+    name = "pantheon-probe",
+    version,
+    about = "Measure latency, jitter, packet loss, DNS resolution, and HTTP transfer throughput."
+)]
+pub struct Cli {
+    #[command(subcommand)]
+    pub command: Commands,
 }
 
-/// parse CLI arguments and return a CliArgs struct.
-pub fn parse_cli_args() -> CliArgs {
-    let matches = App::new("PantheonProbe")
-        .arg(
-            Arg::with_name("target")
-                .short("t")
-                .long("target")
-                .value_name("HOST")
-                .help("Sets the target host or IP address")
-                .takes_value(true),
-        )
-        .get_matches();
-
-    let target_host = matches
-        .value_of("target")
-        .map(|s| s.to_string())
-        .unwrap_or_else(|| {
-            let mut target = String::new();
-            println!("Enter your desired target host or IP address:");
-            std::io::stdin()
-                .read_line(&mut target)
-                .expect("Oops! Failed to read line");
-            target.trim().to_string()
-        });
-
-    CliArgs { target_host }
+#[derive(Debug, Subcommand)]
+pub enum Commands {
+    Run(RunArgs),
+    Watch(WatchArgs),
+    Tui(TuiArgs),
 }
 
-/// prompt the user to continue or not
-pub fn should_continue() -> bool {
-    println!("Do you wish to continue? (y/n)");
-    let mut input = String::new();
-    std::io::stdin()
-        .read_line(&mut input)
-        .expect("Oops! Failed to read line");
-    let input = input.trim().to_lowercase();
-    input == "y" || input == "yes"
+#[derive(Debug, Clone, Args)]
+pub struct SharedProbeArgs {
+    #[arg(short, long)]
+    pub target: String,
+    #[arg(short = 'n', long, default_value_t = DEFAULT_SAMPLE_COUNT)]
+    pub samples: u32,
+    #[arg(long, default_value = DEFAULT_DOWNLOAD_URL)]
+    pub download_url: String,
+    #[arg(long, default_value = DEFAULT_UPLOAD_URL)]
+    pub upload_url: String,
+    #[arg(long, default_value_t = DEFAULT_UPLOAD_SIZE_BYTES)]
+    pub upload_size_bytes: usize,
+}
+
+impl SharedProbeArgs {
+    pub fn to_probe_options(&self) -> ProbeOptions {
+        ProbeOptions {
+            target: self.target.clone(),
+            samples: self.samples,
+            bandwidth: BandwidthConfig {
+                download_url: self.download_url.clone(),
+                upload_url: self.upload_url.clone(),
+                upload_size_bytes: self.upload_size_bytes,
+            },
+        }
+    }
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct RunArgs {
+    #[command(flatten)]
+    pub probe: SharedProbeArgs,
+    #[arg(long)]
+    pub json: bool,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct WatchArgs {
+    #[command(flatten)]
+    pub probe: SharedProbeArgs,
+    #[arg(short, long, default_value_t = DEFAULT_INTERVAL_SECONDS)]
+    pub interval: u64,
+    #[arg(long)]
+    pub json: bool,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct TuiArgs {
+    #[command(flatten)]
+    pub probe: SharedProbeArgs,
+    #[arg(short, long, default_value_t = DEFAULT_INTERVAL_SECONDS)]
+    pub interval: u64,
 }
