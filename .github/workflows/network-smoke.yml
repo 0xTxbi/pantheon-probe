@@ -31,4 +31,4 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          timeout 90s cargo run --locked -- run -t 1.1.1.1
+          timeout 90s cargo run --locked -- run -t 1.1.1.1 --bandwidth-runs 1 --download-streams 1 --upload-streams 1 --upload-size-bytes 100000
