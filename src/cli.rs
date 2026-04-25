@@ -7,6 +7,9 @@ const DEFAULT_SAMPLE_COUNT: u32 = 5;
 const DEFAULT_DOWNLOAD_URL: &str = "https://speed.cloudflare.com/__down?bytes=4000000";
 const DEFAULT_UPLOAD_URL: &str = "https://speed.cloudflare.com/__up";
 const DEFAULT_UPLOAD_SIZE_BYTES: usize = 1_000_000;
+const DEFAULT_BANDWIDTH_RUNS: u32 = 3;
+const DEFAULT_DOWNLOAD_STREAMS: u32 = 2;
+const DEFAULT_UPLOAD_STREAMS: u32 = 2;
 
 #[derive(Debug, Parser)]
 #[command(
@@ -38,6 +41,12 @@ pub struct SharedProbeArgs {
     pub upload_url: String,
     #[arg(long, default_value_t = DEFAULT_UPLOAD_SIZE_BYTES)]
     pub upload_size_bytes: usize,
+    #[arg(long, default_value_t = DEFAULT_BANDWIDTH_RUNS)]
+    pub bandwidth_runs: u32,
+    #[arg(long, default_value_t = DEFAULT_DOWNLOAD_STREAMS)]
+    pub download_streams: u32,
+    #[arg(long, default_value_t = DEFAULT_UPLOAD_STREAMS)]
+    pub upload_streams: u32,
 }
 
 impl SharedProbeArgs {
@@ -49,6 +58,9 @@ impl SharedProbeArgs {
                 download_url: self.download_url.clone(),
                 upload_url: self.upload_url.clone(),
                 upload_size_bytes: self.upload_size_bytes,
+                runs: self.bandwidth_runs,
+                download_streams: self.download_streams,
+                upload_streams: self.upload_streams,
             },
         }
     }
