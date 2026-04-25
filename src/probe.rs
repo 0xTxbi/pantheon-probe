@@ -4,6 +4,7 @@ use serde::Serialize;
 use std::net::{IpAddr, ToSocketAddrs};
 use std::process::Command;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use tokio::task::JoinSet;
 
 #[derive(Debug, Clone)]
 pub struct ProbeOptions {
@@ -17,6 +18,9 @@ pub struct BandwidthConfig {
     pub download_url: String,
     pub upload_url: String,
     pub upload_size_bytes: usize,
+    pub runs: u32,
+    pub download_streams: u32,
+    pub upload_streams: u32,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -58,7 +62,10 @@ pub struct PingSummary {
     pub packet_loss_pct: f64,
     pub min_ms: Option<f64>,
     pub avg_ms: Option<f64>,
+    pub median_ms: Option<f64>,
+    pub p95_ms: Option<f64>,
     pub max_ms: Option<f64>,
+    pub stddev_ms: Option<f64>,
     pub jitter_ms: Option<f64>,
     pub samples_ms: Vec<f64>,
 }
@@ -73,10 +80,35 @@ pub struct DnsSummary {
 pub struct BandwidthSummary {
     pub download_mbps: f64,
     pub upload_mbps: f64,
+    pub download: MetricStats,
+    pub upload: MetricStats,
+    pub download_runs: Vec<TransferSample>,
+    pub upload_runs: Vec<TransferSample>,
     pub download_bytes: u64,
     pub upload_bytes: u64,
+    pub runs: u32,
+    pub download_streams: u32,
+    pub upload_streams: u32,
     pub download_url: String,
     pub upload_url: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct MetricStats {
+    pub min: f64,
+    pub mean: f64,
+    pub median: f64,
+    pub p95: f64,
+    pub max: f64,
+    pub stddev: f64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct TransferSample {
+    pub mbps: f64,
+    pub bytes: u64,
+    pub elapsed_ms: f64,
+    pub streams: u32,
 }
 
 pub async fn run_probe_suite(options: &ProbeOptions) -> Result<ProbeReport> {
@@ -129,6 +161,10 @@ pub fn format_report(report: &ProbeReport) -> String {
             format!("  sent/received: {}/{}", ping.sent, ping.received),
             format!("  packet loss: {:.2}%", ping.packet_loss_pct),
             format!("  {latency}"),
+            format!(
+                "  median/p95/stddev: {}",
+                format_optional_triplet(ping.median_ms, ping.p95_ms, ping.stddev_ms, "ms")
+            ),
             format!("  jitter: {jitter}"),
         ]
         .join("\n")
@@ -146,8 +182,18 @@ pub fn format_report(report: &ProbeReport) -> String {
     output.push_str("\nBandwidth\n");
     output.push_str(&format_outcome(&report.bandwidth, |bandwidth| {
         [
-            format!("  download: {:.2} Mbps", bandwidth.download_mbps),
-            format!("  upload: {:.2} Mbps", bandwidth.upload_mbps),
+            format!(
+                "  download: {:.2} Mbps median, {:.2} Mbps p95",
+                bandwidth.download.median, bandwidth.download.p95
+            ),
+            format!(
+                "  upload: {:.2} Mbps median, {:.2} Mbps p95",
+                bandwidth.upload.median, bandwidth.upload.p95
+            ),
+            format!(
+                "  runs/streams: {} runs, {} down streams, {} up streams",
+                bandwidth.runs, bandwidth.download_streams, bandwidth.upload_streams
+            ),
             format!("  download source: {}", bandwidth.download_url),
             format!("  upload source: {}", bandwidth.upload_url),
         ]
@@ -163,6 +209,20 @@ fn format_outcome<T>(outcome: &ProbeOutcome<T>, formatter: impl FnOnce(&T) -> St
         (Some(value), _) => formatter(value),
         (None, Some(error)) => format!("  error: {error}"),
         (None, None) => "  unavailable".to_string(),
+    }
+}
+
+fn format_optional_triplet(
+    first: Option<f64>,
+    second: Option<f64>,
+    third: Option<f64>,
+    unit: &str,
+) -> String {
+    match (first, second, third) {
+        (Some(first), Some(second), Some(third)) => {
+            format!("{first:.2}/{second:.2}/{third:.2} {unit}")
+        }
+        _ => "unavailable".to_string(),
     }
 }
 
@@ -204,23 +264,22 @@ fn parse_ping_output(output: &str, sent: u32) -> Result<PingSummary> {
         return Err(anyhow!("ping produced no parseable output"));
     }
 
-    let (min_ms, avg_ms, max_ms, jitter_ms) = if samples_ms.is_empty() {
-        (None, None, None, None)
+    let (min_ms, avg_ms, median_ms, p95_ms, max_ms, stddev_ms, jitter_ms) = if samples_ms.is_empty()
+    {
+        (None, None, None, None, None, None, None)
     } else {
-        let min_ms = samples_ms
-            .iter()
-            .copied()
-            .reduce(f64::min)
-            .context("failed to derive minimum ping latency")?;
-        let max_ms = samples_ms
-            .iter()
-            .copied()
-            .reduce(f64::max)
-            .context("failed to derive maximum ping latency")?;
-        let avg_ms = samples_ms.iter().sum::<f64>() / samples_ms.len() as f64;
+        let stats = calculate_stats(&samples_ms).context("failed to derive ping stats")?;
         let jitter_ms = calculate_jitter_ms(&samples_ms);
 
-        (Some(min_ms), Some(avg_ms), Some(max_ms), jitter_ms)
+        (
+            Some(stats.min),
+            Some(stats.mean),
+            Some(stats.median),
+            Some(stats.p95),
+            Some(stats.max),
+            Some(stats.stddev),
+            jitter_ms,
+        )
     };
 
     Ok(PingSummary {
@@ -229,7 +288,10 @@ fn parse_ping_output(output: &str, sent: u32) -> Result<PingSummary> {
         packet_loss_pct,
         min_ms,
         avg_ms,
+        median_ms,
+        p95_ms,
         max_ms,
+        stddev_ms,
         jitter_ms,
         samples_ms,
     })
@@ -303,31 +365,112 @@ async fn measure_bandwidth(config: &BandwidthConfig) -> Result<BandwidthSummary>
         .build()
         .context("failed to build HTTP client for bandwidth probe")?;
 
-    let (download_bytes, download_elapsed) = download_bytes(&client, &config.download_url)
-        .await
-        .with_context(|| {
-            format!(
-                "download throughput check failed for {}",
-                config.download_url
-            )
-        })?;
+    let runs = config.runs.max(1);
+    let download_streams = config.download_streams.max(1);
+    let upload_streams = config.upload_streams.max(1);
+    let mut download_runs = Vec::with_capacity(runs as usize);
+    let mut upload_runs = Vec::with_capacity(runs as usize);
 
-    let (upload_bytes, upload_elapsed) = upload_bytes(&client, config)
-        .await
-        .with_context(|| format!("upload throughput check failed for {}", config.upload_url))?;
+    for _ in 0..runs {
+        download_runs.push(
+            download_sample(&client, &config.download_url, download_streams)
+                .await
+                .with_context(|| {
+                    format!(
+                        "download throughput check failed for {}",
+                        config.download_url
+                    )
+                })?,
+        );
+        upload_runs.push(
+            upload_sample(&client, config, upload_streams)
+                .await
+                .with_context(|| {
+                    format!("upload throughput check failed for {}", config.upload_url)
+                })?,
+        );
+    }
+
+    let download_values: Vec<f64> = download_runs.iter().map(|sample| sample.mbps).collect();
+    let upload_values: Vec<f64> = upload_runs.iter().map(|sample| sample.mbps).collect();
+    let download = calculate_stats(&download_values).context("failed to derive download stats")?;
+    let upload = calculate_stats(&upload_values).context("failed to derive upload stats")?;
+    let download_bytes = download_runs.iter().map(|sample| sample.bytes).sum();
+    let upload_bytes = upload_runs.iter().map(|sample| sample.bytes).sum();
 
     Ok(BandwidthSummary {
-        download_mbps: bytes_to_mbps(download_bytes, download_elapsed),
-        upload_mbps: bytes_to_mbps(upload_bytes, upload_elapsed),
+        download_mbps: download.median,
+        upload_mbps: upload.median,
+        download,
+        upload,
+        download_runs,
+        upload_runs,
         download_bytes,
         upload_bytes,
+        runs,
+        download_streams,
+        upload_streams,
         download_url: config.download_url.clone(),
         upload_url: config.upload_url.clone(),
     })
 }
 
-async fn download_bytes(client: &Client, url: &str) -> Result<(u64, Duration)> {
+async fn download_sample(client: &Client, url: &str, streams: u32) -> Result<TransferSample> {
     let started = Instant::now();
+    let mut tasks = JoinSet::new();
+
+    for _ in 0..streams {
+        let client = client.clone();
+        let url = url.to_string();
+        tasks.spawn(async move { download_bytes(&client, &url).await });
+    }
+
+    let mut total_bytes = 0_u64;
+    while let Some(result) = tasks.join_next().await {
+        total_bytes += result.context("download worker failed to join")??;
+    }
+
+    let elapsed = started.elapsed();
+
+    Ok(TransferSample {
+        mbps: bytes_to_mbps(total_bytes, elapsed),
+        bytes: total_bytes,
+        elapsed_ms: duration_to_ms(elapsed),
+        streams,
+    })
+}
+
+async fn upload_sample(
+    client: &Client,
+    config: &BandwidthConfig,
+    streams: u32,
+) -> Result<TransferSample> {
+    let started = Instant::now();
+    let mut tasks = JoinSet::new();
+    let stream_payload_size = split_size(config.upload_size_bytes, streams);
+
+    for _ in 0..streams {
+        let client = client.clone();
+        let upload_url = config.upload_url.clone();
+        tasks.spawn(async move { upload_bytes(&client, &upload_url, stream_payload_size).await });
+    }
+
+    let mut total_bytes = 0_u64;
+    while let Some(result) = tasks.join_next().await {
+        total_bytes += result.context("upload worker failed to join")??;
+    }
+
+    let elapsed = started.elapsed();
+
+    Ok(TransferSample {
+        mbps: bytes_to_mbps(total_bytes, elapsed),
+        bytes: total_bytes,
+        elapsed_ms: duration_to_ms(elapsed),
+        streams,
+    })
+}
+
+async fn download_bytes(client: &Client, url: &str) -> Result<u64> {
     let mut response = client
         .get(url)
         .send()
@@ -345,29 +488,23 @@ async fn download_bytes(client: &Client, url: &str) -> Result<(u64, Duration)> {
         total_bytes += chunk.len() as u64;
     }
 
-    Ok((total_bytes, started.elapsed()))
+    Ok(total_bytes)
 }
 
-async fn upload_bytes(client: &Client, config: &BandwidthConfig) -> Result<(u64, Duration)> {
-    let payload = vec![b'x'; config.upload_size_bytes];
+async fn upload_bytes(client: &Client, upload_url: &str, payload_size: usize) -> Result<u64> {
+    let payload = vec![b'x'; payload_size];
     let payload_len = payload.len() as u64;
-    let started = Instant::now();
 
     client
-        .post(&config.upload_url)
+        .post(upload_url)
         .body(payload)
         .send()
         .await
-        .with_context(|| format!("failed to POST {}", config.upload_url))?
+        .with_context(|| format!("failed to POST {upload_url}"))?
         .error_for_status()
-        .with_context(|| {
-            format!(
-                "upload endpoint returned an error for {}",
-                config.upload_url
-            )
-        })?;
+        .with_context(|| format!("upload endpoint returned an error for {upload_url}"))?;
 
-    Ok((payload_len, started.elapsed()))
+    Ok(payload_len)
 }
 
 fn bytes_to_mbps(bytes: u64, elapsed: Duration) -> f64 {
@@ -382,9 +519,59 @@ fn duration_to_ms(duration: Duration) -> f64 {
     duration.as_secs_f64() * 1_000.0
 }
 
+fn calculate_stats(values: &[f64]) -> Option<MetricStats> {
+    if values.is_empty() {
+        return None;
+    }
+
+    let mut sorted = values.to_vec();
+    sorted.sort_by(f64::total_cmp);
+
+    let mean = sorted.iter().sum::<f64>() / sorted.len() as f64;
+    let variance = sorted
+        .iter()
+        .map(|value| {
+            let delta = value - mean;
+            delta * delta
+        })
+        .sum::<f64>()
+        / sorted.len() as f64;
+
+    Some(MetricStats {
+        min: sorted[0],
+        mean,
+        median: percentile(&sorted, 50.0),
+        p95: percentile(&sorted, 95.0),
+        max: sorted[sorted.len() - 1],
+        stddev: variance.sqrt(),
+    })
+}
+
+fn percentile(sorted_values: &[f64], percentile: f64) -> f64 {
+    if sorted_values.len() == 1 {
+        return sorted_values[0];
+    }
+
+    let rank = (percentile / 100.0) * (sorted_values.len() - 1) as f64;
+    let lower = rank.floor() as usize;
+    let upper = rank.ceil() as usize;
+
+    if lower == upper {
+        return sorted_values[lower];
+    }
+
+    let weight = rank - lower as f64;
+    sorted_values[lower] * (1.0 - weight) + sorted_values[upper] * weight
+}
+
+fn split_size(total_size: usize, streams: u32) -> usize {
+    let streams = streams.max(1) as usize;
+    total_size.div_ceil(streams)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{calculate_jitter_ms, parse_ping_output};
+    use super::{calculate_jitter_ms, calculate_stats, parse_ping_output, split_size};
 
     #[test]
     fn parses_unix_ping_output_into_structured_stats() {
@@ -404,6 +591,8 @@ PING example.com (93.184.216.34): 56 data bytes
         assert_eq!(parsed.min_ms, Some(21.4));
         assert_eq!(parsed.max_ms, Some(24.1));
         assert!(parsed.avg_ms.expect("avg latency should exist") > 22.0);
+        assert_eq!(parsed.median_ms, Some(23.0));
+        assert!(parsed.p95_ms.expect("p95 latency should exist") > 23.0);
         assert!(parsed.jitter_ms.expect("jitter should exist") > 2.0);
     }
 
@@ -425,5 +614,23 @@ Reply from 1.1.1.1: bytes=32 time=2ms TTL=59
     fn jitter_uses_absolute_latency_deltas() {
         let jitter = calculate_jitter_ms(&[10.0, 20.0, 15.0]).expect("jitter should exist");
         assert!((jitter - 7.5).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn calculates_distribution_stats() {
+        let stats = calculate_stats(&[10.0, 20.0, 30.0, 40.0]).expect("stats should exist");
+
+        assert_eq!(stats.min, 10.0);
+        assert_eq!(stats.max, 40.0);
+        assert_eq!(stats.mean, 25.0);
+        assert_eq!(stats.median, 25.0);
+        assert!((stats.p95 - 38.5).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn splits_upload_payload_across_streams() {
+        assert_eq!(split_size(1_000_000, 2), 500_000);
+        assert_eq!(split_size(1_000_001, 2), 500_001);
+        assert_eq!(split_size(10, 0), 10);
     }
 }
