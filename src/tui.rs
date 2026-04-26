@@ -17,6 +17,10 @@ use ratatui::{
 };
 
 use crate::probe::{format_report, run_probe_suite, ProbeOptions, ProbeReport};
+use crate::storage::{
+    compare_reports, format_comparison, format_history, latest_run, list_runs, save_run,
+    RunComparison, StoredRun,
+};
 use crate::version;
 
 pub async fn run_tui(options: ProbeOptions, interval_seconds: u64) -> Result<()> {
@@ -29,7 +33,12 @@ pub async fn run_tui(options: ProbeOptions, interval_seconds: u64) -> Result<()>
 
         match run_probe_suite(&options).await {
             Ok(report) => {
+                let comparison = latest_run(&options.target)?
+                    .map(|previous| compare_reports(&previous.report, &report));
+                save_run(&report)?;
                 state.report = Some(report);
+                state.comparison = comparison;
+                state.history = list_runs(Some(&options.target), 5)?;
                 state.error = None;
                 state.refresh_count += 1;
                 state.status = "Press q to quit, r to refresh now.".to_string();
@@ -73,6 +82,8 @@ struct TuiState {
     refresh_count: u64,
     status: String,
     report: Option<ProbeReport>,
+    comparison: Option<RunComparison>,
+    history: Vec<StoredRun>,
     error: Option<String>,
 }
 
@@ -84,6 +95,8 @@ impl TuiState {
             refresh_count: 0,
             status: "Starting PantheonProbe TUI...".to_string(),
             report: None,
+            comparison: None,
+            history: Vec::new(),
             error: None,
         }
     }
@@ -129,6 +142,11 @@ fn draw(terminal: &mut Terminal<CrosstermBackend<Stdout>>, state: &TuiState) -> 
         .block(Block::default().borders(Borders::ALL).title("Overview"));
         frame.render_widget(header, layout[0]);
 
+        let body_layout = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(68), Constraint::Percentage(32)])
+            .split(layout[1]);
+
         let body_text = match (&state.report, &state.error) {
             (_, Some(error)) => format!("Probe error\n\n{error}"),
             (Some(report), None) => format_report(report),
@@ -142,7 +160,25 @@ fn draw(terminal: &mut Terminal<CrosstermBackend<Stdout>>, state: &TuiState) -> 
                     .title("Latest report"),
             )
             .wrap(Wrap { trim: false });
-        frame.render_widget(body, layout[1]);
+        frame.render_widget(body, body_layout[0]);
+
+        let side_text = match (&state.comparison, state.history.is_empty()) {
+            (Some(comparison), false) => {
+                format!(
+                    "{}\n\nRecent runs\n{}",
+                    format_comparison(comparison),
+                    format_history(&state.history)
+                )
+            }
+            (Some(comparison), true) => format_comparison(comparison),
+            (None, false) => format!("Recent runs\n{}", format_history(&state.history)),
+            (None, true) => "No saved history yet.".to_string(),
+        };
+
+        let side_panel = Paragraph::new(side_text)
+            .block(Block::default().borders(Borders::ALL).title("History"))
+            .wrap(Wrap { trim: false });
+        frame.render_widget(side_panel, body_layout[1]);
 
         let footer = Paragraph::new(Line::from(state.status.clone()))
             .block(Block::default().borders(Borders::ALL).title("Status"));

@@ -1,106 +1,91 @@
-# PantheonProbe 🛰️
+# PantheonProbe
 
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-PantheonProbe is a network diagnostic tool that provides comprehensive insights
-into your network performance. It's designed to help you measure latency, packet
-loss, jitter, and bandwidth with ease.
+PantheonProbe is a Rust network diagnostics CLI for measuring latency, packet
+loss, jitter, DNS resolution time, and HTTP transfer throughput. It supports
+single runs, repeated watch mode, an interactive terminal dashboard, and local
+history for comparing results over time.
 
----
-
-## Table of Contents
-
-- [PantheonProbe 🛰️](#pantheonprobe-️)
-     - [Table of Contents](#table-of-contents)
-     - [1. Installation ](#1-installation-)
-     - [2. Usage ](#2-usage-)
-          - [Options ](#options-)
-          - [Examples ](#examples-)
-     - [3. Network Metrics ](#3-network-metrics-)
-          - [Latency ⏱️](#latency-️)
-          - [Packet Loss 📦 🚫](#packet-loss--)
-          - [Jitter 🌊](#jitter-)
-          - [Bandwidth 🌐](#bandwidth-)
-          - [DNS Resolution Time 🕒](#dns-resolution-time-)
-     - [5. Reporting Issues ](#5-reporting-issues-)
-     - [6. License ](#6-license-)
-
----
-
-## 1. Installation <a name="installation"></a>
-
-To install PantheonProbe, use the Rust package manager, Cargo:
+## Installation
 
 ```sh
 cargo install pantheon-probe
 ```
 
-This command will download and compile the tool, making it ready for use.
+## Commands
 
----
+Run a measurement:
 
-## 2. Usage <a name="usage"></a>
+```sh
+pantheon-probe run -t 1.1.1.1
+```
 
-PantheonProbe provides a range of options to customize and fine-tune network
-measurements.
+Watch repeated measurements:
 
-### Options <a name="options"></a>
+```sh
+pantheon-probe watch -t 1.1.1.1 --interval 30
+```
 
-- `-t, --target <HOST>`: Specifies the target host or IP address for testing.
+Launch the terminal dashboard:
 
-### Examples <a name="examples"></a>
+```sh
+pantheon-probe tui -t 1.1.1.1 --interval 30
+```
 
-1. Measure network metrics for a specific host:
+Show recent saved runs:
 
-      ```sh
-      pantheon-probe -t example.com
-      ```
+```sh
+pantheon-probe history -t 1.1.1.1 --limit 5
+```
 
----
+Export saved runs:
 
-## 3. Network Metrics <a name="network-metrics"></a>
+```sh
+pantheon-probe export -t 1.1.1.1 --format csv
+```
 
-PantheonProbe provides the following network metrics:
+Compare the latest two runs for a target:
 
-### Latency ⏱️<a name="latency"></a>
+```sh
+pantheon-probe compare -t 1.1.1.1
+```
 
-Latency measures the time taken for a packet to travel from the source to the
-destination and back. It is an essential metric for assessing the responsiveness
-of a network connection.
+Compare two specific saved runs:
 
-### Packet Loss 📦 🚫<a name="packet-loss"></a>
+```sh
+pantheon-probe compare --previous-id 1777210123095-1-1-1-1 --current-id 1777210223714-1-1-1-1
+```
 
-Packet loss quantifies the percentage of packets that fail to reach their
-destination. High packet loss can indicate network congestion or instability.
+Use JSON output for automation:
 
-### Jitter 🌊<a name="jitter"></a>
+```sh
+pantheon-probe run -t 1.1.1.1 --json
+```
 
-Jitter measures the variability in packet arrival times. A low jitter value
-indicates a stable network connection, while high jitter can lead to
-inconsistent performance.
+## Storage
 
-### Bandwidth 🌐<a name="bandwidth"></a>
+PantheonProbe saves probe runs under `~/.pantheon-probe/runs` by default.
 
-Bandwidth measures the maximum data transfer rate between two points in a
-network. It is crucial for determining the capacity of a network connection.
+To override the storage location:
 
-### DNS Resolution Time 🕒<a name="dns-resolution-time"></a>
+```sh
+PANTHEON_PROBE_HOME=/path/to/data pantheon-probe history
+```
 
-DNS Resolution Time measures the time taken to resolve the target host's domain
-name to an IP address. This metric is important for understanding the efficiency
-of DNS resolution in your network.
+## Measurements
 
----
+- `ping`: sent, received, packet loss, min, avg, median, p95, max, stddev, and
+  jitter
+- `dns`: resolution time and resolved addresses
+- `bandwidth`: repeated HTTP download and upload runs with aggregate stats
 
-## 5. Reporting Issues <a name="reporting-issues"></a>
+## Notes
 
-If you encounter any issues or have suggestions for improvement, please
-[open an issue on GitHub](https://github.com/0xTxbi/pantheon-probe/issues).
+- Ping measurements currently shell out to the system `ping` command.
+- Throughput checks use configurable HTTP endpoints and default to Cloudflare
+  speed test URLs.
 
----
+## Issues
 
-## 6. License <a name="license"></a>
-
-This tool is licensed under the MIT License. See the
-[LICENSE](https://github.com/0xTxbi/pantheon-probe/blob/main/LICENSE) file for
-details.
+If you hit a bug or want a feature, [open an issue](https://github.com/0xTxbi/pantheon-probe/issues).

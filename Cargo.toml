@@ -1,6 +1,6 @@
 [package]
 name = "pantheon-probe"
-version = "0.3.0"
+version = "0.4.0"
 description = "Pantheon Probe is a versatile network diagnostics tool designed for measuring latency, packet loss, jitter, and bandwidth."
 authors = ["Joseph David <techiejossy@gmail.com>"]
 edition = "2021"

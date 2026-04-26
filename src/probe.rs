@@ -1,6 +1,6 @@
 use anyhow::{anyhow, Context, Result};
 use reqwest::Client;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::net::{IpAddr, ToSocketAddrs};
 use std::process::Command;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -23,7 +23,7 @@ pub struct BandwidthConfig {
     pub upload_streams: u32,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProbeReport {
     pub target: String,
     pub samples: u32,
@@ -33,7 +33,7 @@ pub struct ProbeReport {
     pub bandwidth: ProbeOutcome<BandwidthSummary>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProbeOutcome<T> {
     pub value: Option<T>,
     pub error: Option<String>,
@@ -55,7 +55,7 @@ impl<T> ProbeOutcome<T> {
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PingSummary {
     pub sent: u32,
     pub received: u32,
@@ -70,13 +70,13 @@ pub struct PingSummary {
     pub samples_ms: Vec<f64>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DnsSummary {
     pub resolution_time_ms: f64,
     pub addresses: Vec<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BandwidthSummary {
     pub download_mbps: f64,
     pub upload_mbps: f64,
@@ -93,7 +93,7 @@ pub struct BandwidthSummary {
     pub upload_url: String,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MetricStats {
     pub min: f64,
     pub mean: f64,
@@ -103,7 +103,7 @@ pub struct MetricStats {
     pub stddev: f64,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TransferSample {
     pub mbps: f64,
     pub bytes: u64,
