@@ -1,4 +1,4 @@
-use clap::{Args, Parser, Subcommand};
+use clap::{Args, Parser, Subcommand, ValueEnum};
 
 use crate::probe::{BandwidthConfig, ProbeOptions};
 
@@ -10,6 +10,7 @@ const DEFAULT_UPLOAD_SIZE_BYTES: usize = 1_000_000;
 const DEFAULT_BANDWIDTH_RUNS: u32 = 3;
 const DEFAULT_DOWNLOAD_STREAMS: u32 = 2;
 const DEFAULT_UPLOAD_STREAMS: u32 = 2;
+const DEFAULT_HISTORY_LIMIT: usize = 10;
 
 #[derive(Debug, Parser)]
 #[command(
@@ -27,6 +28,9 @@ pub enum Commands {
     Run(RunArgs),
     Watch(WatchArgs),
     Tui(TuiArgs),
+    History(HistoryArgs),
+    Export(ExportArgs),
+    Compare(CompareArgs),
 }
 
 #[derive(Debug, Clone, Args)]
@@ -70,6 +74,44 @@ impl SharedProbeArgs {
 pub struct RunArgs {
     #[command(flatten)]
     pub probe: SharedProbeArgs,
+    #[arg(long)]
+    pub json: bool,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct HistoryArgs {
+    #[arg(short, long)]
+    pub target: Option<String>,
+    #[arg(short, long, default_value_t = DEFAULT_HISTORY_LIMIT)]
+    pub limit: usize,
+    #[arg(long)]
+    pub json: bool,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct ExportArgs {
+    #[arg(short, long)]
+    pub target: Option<String>,
+    #[arg(short, long, default_value_t = DEFAULT_HISTORY_LIMIT)]
+    pub limit: usize,
+    #[arg(short, long, value_enum, default_value_t = ExportFormat::Json)]
+    pub format: ExportFormat,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+pub enum ExportFormat {
+    Json,
+    Csv,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct CompareArgs {
+    #[arg(short, long)]
+    pub target: Option<String>,
+    #[arg(long)]
+    pub previous_id: Option<String>,
+    #[arg(long)]
+    pub current_id: Option<String>,
     #[arg(long)]
     pub json: bool,
 }
