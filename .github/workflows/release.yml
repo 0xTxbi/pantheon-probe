@@ -2,19 +2,62 @@ name: Release
 
 on:
   push:
-    tags:
-      - "*"
+    branches:
+      - main
+  workflow_dispatch:
 
 env:
   CARGO_TERM_COLOR: always
 
 permissions:
   contents: write
+  pull-requests: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
+  prepare:
+    name: Prepare release
+    runs-on: ubuntu-latest
+    outputs:
+      should_release: ${{ steps.metadata.outputs.should_release }}
+      version: ${{ steps.metadata.outputs.version }}
+      tag: ${{ steps.metadata.outputs.tag }}
+      title: ${{ steps.metadata.outputs.title }}
+      notes: ${{ steps.metadata.outputs.notes }}
+      previous_version: ${{ steps.metadata.outputs.previous_version }}
+      version_bumped: ${{ steps.metadata.outputs.version_bumped }}
+      has_releasable_changes: ${{ steps.metadata.outputs.has_releasable_changes }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Determine release metadata
+        id: metadata
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: ./.github/scripts/release-metadata.sh
+
+      - name: Print release decision
+        run: |
+          echo "should_release=${{ steps.metadata.outputs.should_release }}"
+          echo "version=${{ steps.metadata.outputs.version }}"
+          echo "tag=${{ steps.metadata.outputs.tag }}"
+          echo "title=${{ steps.metadata.outputs.title }}"
+          echo "previous_version=${{ steps.metadata.outputs.previous_version }}"
+          echo "version_bumped=${{ steps.metadata.outputs.version_bumped }}"
+          echo "has_releasable_changes=${{ steps.metadata.outputs.has_releasable_changes }}"
+
   validate:
     name: Validate release
     runs-on: ubuntu-latest
+    needs: prepare
+    if: needs.prepare.outputs.should_release == 'true'
 
     steps:
       - name: Checkout
@@ -46,7 +89,10 @@ jobs:
   build:
     name: Build release (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    needs: validate
+    needs:
+      - prepare
+      - validate
+    if: needs.prepare.outputs.should_release == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -94,18 +140,78 @@ jobs:
           name: ${{ matrix.artifact_name }}
           path: dist/${{ matrix.artifact_name }}.${{ matrix.archive_ext }}
 
-  publish-github-release:
-    name: Publish GitHub release assets
+  publish:
+    name: Publish release
     runs-on: ubuntu-latest
-    needs: build
+    needs:
+      - prepare
+      - build
+    if: needs.prepare.outputs.should_release == 'true'
 
     steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
       - name: Download built artifacts
         uses: actions/download-artifact@v4
         with:
           path: dist
 
-      - name: Publish release assets
-        uses: softprops/action-gh-release@v2
-        with:
-          files: dist/**/*.* 
+      - name: Publish crate to crates.io
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${{ needs.prepare.outputs.version }}"
+          crate_status="$(
+            curl -fsS -o /tmp/pantheon-probe-crate.json -w "%{http_code}" \
+              "https://crates.io/api/v1/crates/pantheon-probe/${version}" || true
+          )"
+
+          if [[ "$crate_status" == "200" ]]; then
+            echo "pantheon-probe ${version} is already published on crates.io"
+            exit 0
+          fi
+
+          if [[ -z "${CARGO_REGISTRY_TOKEN:-}" ]]; then
+            echo "CARGO_REGISTRY_TOKEN secret is required for automated crates.io publishing" >&2
+            exit 1
+          fi
+
+          cargo publish --locked
+
+      - name: Create or update GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="${{ needs.prepare.outputs.tag }}"
+          title="${{ needs.prepare.outputs.title }}"
+          notes_file="$(mktemp)"
+
+          cat >"$notes_file" <<'EOF'
+          ${{ needs.prepare.outputs.notes }}
+          EOF
+
+          mapfile -t files < <(find dist -type f | sort)
+          if (( ${#files[@]} == 0 )); then
+            echo "no release artifacts were downloaded" >&2
+            exit 1
+          fi
+
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release edit "$tag" --title "$title" --notes-file "$notes_file"
+            gh release upload "$tag" "${files[@]}" --clobber
+          else
+            gh release create "$tag" "${files[@]}" \
+              --title "$title" \
+              --notes-file "$notes_file" \
+              --target "$GITHUB_SHA"
+          fi
