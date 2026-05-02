@@ -1,31 +1,222 @@
 use anyhow::{anyhow, Context, Result};
+use clap::ValueEnum;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
+use std::fmt;
 use std::net::{IpAddr, ToSocketAddrs};
 use std::process::Command;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::task::JoinSet;
 
+const CLOUDFLARE_UPLOAD_URL: &str = "https://speed.cloudflare.com/__up";
+
 #[derive(Debug, Clone)]
 pub struct ProbeOptions {
     pub target: String,
+    pub profile: MeasurementProfile,
     pub samples: u32,
     pub bandwidth: BandwidthConfig,
 }
 
 #[derive(Debug, Clone)]
 pub struct BandwidthConfig {
+    pub provider: BandwidthProviderPreset,
     pub download_url: String,
     pub upload_url: String,
+    pub download_size_bytes: usize,
     pub upload_size_bytes: usize,
     pub runs: u32,
     pub download_streams: u32,
     pub upload_streams: u32,
 }
 
+#[derive(Debug, Clone)]
+pub struct ProbeOverrides {
+    pub target: String,
+    pub profile: MeasurementProfile,
+    pub provider: BandwidthProviderPreset,
+    pub samples: Option<u32>,
+    pub download_url: Option<String>,
+    pub upload_url: Option<String>,
+    pub download_size_bytes: Option<usize>,
+    pub upload_size_bytes: Option<usize>,
+    pub bandwidth_runs: Option<u32>,
+    pub download_streams: Option<u32>,
+    pub upload_streams: Option<u32>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ValueEnum)]
+#[serde(rename_all = "kebab-case")]
+pub enum MeasurementProfile {
+    Quick,
+    Standard,
+    Full,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ValueEnum)]
+#[serde(rename_all = "kebab-case")]
+pub enum BandwidthProviderPreset {
+    Cloudflare,
+    Custom,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ProfileDefaults {
+    samples: u32,
+    download_size_bytes: usize,
+    upload_size_bytes: usize,
+    bandwidth_runs: u32,
+    download_streams: u32,
+    upload_streams: u32,
+}
+
+impl MeasurementProfile {
+    fn defaults(self) -> ProfileDefaults {
+        match self {
+            Self::Quick => ProfileDefaults {
+                samples: 3,
+                download_size_bytes: 2_000_000,
+                upload_size_bytes: 500_000,
+                bandwidth_runs: 1,
+                download_streams: 1,
+                upload_streams: 1,
+            },
+            Self::Standard => ProfileDefaults {
+                samples: 5,
+                download_size_bytes: 4_000_000,
+                upload_size_bytes: 1_000_000,
+                bandwidth_runs: 3,
+                download_streams: 2,
+                upload_streams: 2,
+            },
+            Self::Full => ProfileDefaults {
+                samples: 7,
+                download_size_bytes: 12_000_000,
+                upload_size_bytes: 4_000_000,
+                bandwidth_runs: 5,
+                download_streams: 4,
+                upload_streams: 4,
+            },
+        }
+    }
+}
+
+impl fmt::Display for MeasurementProfile {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::Quick => "quick",
+            Self::Standard => "standard",
+            Self::Full => "full",
+        })
+    }
+}
+
+impl fmt::Display for BandwidthProviderPreset {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::Cloudflare => "cloudflare",
+            Self::Custom => "custom",
+        })
+    }
+}
+
+pub fn resolve_probe_options(overrides: ProbeOverrides) -> Result<ProbeOptions> {
+    let defaults = overrides.profile.defaults();
+    let samples = overrides.samples.unwrap_or(defaults.samples).max(1);
+    let download_size_bytes = overrides
+        .download_size_bytes
+        .unwrap_or(defaults.download_size_bytes)
+        .max(1);
+    let upload_size_bytes = overrides
+        .upload_size_bytes
+        .unwrap_or(defaults.upload_size_bytes)
+        .max(1);
+    let runs = overrides
+        .bandwidth_runs
+        .unwrap_or(defaults.bandwidth_runs)
+        .max(1);
+    let download_streams = overrides
+        .download_streams
+        .unwrap_or(defaults.download_streams)
+        .max(1);
+    let upload_streams = overrides
+        .upload_streams
+        .unwrap_or(defaults.upload_streams)
+        .max(1);
+
+    let has_download_override = overrides.download_url.is_some();
+    let has_upload_override = overrides.upload_url.is_some();
+    if has_download_override ^ has_upload_override {
+        anyhow::bail!(
+            "provide both --download-url and --upload-url when overriding bandwidth endpoints"
+        );
+    }
+
+    let provider = if has_download_override {
+        BandwidthProviderPreset::Custom
+    } else {
+        overrides.provider
+    };
+
+    let (download_url, upload_url) = match provider {
+        BandwidthProviderPreset::Cloudflare => (
+            build_cloudflare_download_url(download_size_bytes),
+            CLOUDFLARE_UPLOAD_URL.to_string(),
+        ),
+        BandwidthProviderPreset::Custom => (
+            overrides
+                .download_url
+                .ok_or_else(|| anyhow!("custom provider requires --download-url"))?,
+            overrides
+                .upload_url
+                .ok_or_else(|| anyhow!("custom provider requires --upload-url"))?,
+        ),
+    };
+
+    Ok(ProbeOptions {
+        target: overrides.target,
+        profile: overrides.profile,
+        samples,
+        bandwidth: BandwidthConfig {
+            provider,
+            download_url,
+            upload_url,
+            download_size_bytes,
+            upload_size_bytes,
+            runs,
+            download_streams,
+            upload_streams,
+        },
+    })
+}
+
+fn build_cloudflare_download_url(bytes: usize) -> String {
+    format!("https://speed.cloudflare.com/__down?bytes={bytes}")
+}
+
+fn default_measurement_profile() -> MeasurementProfile {
+    MeasurementProfile::Standard
+}
+
+fn default_bandwidth_provider_name() -> String {
+    BandwidthProviderPreset::Cloudflare.to_string()
+}
+
+fn default_download_size_bytes() -> usize {
+    MeasurementProfile::Standard.defaults().download_size_bytes
+}
+
+fn default_upload_size_bytes() -> usize {
+    MeasurementProfile::Standard.defaults().upload_size_bytes
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProbeReport {
     pub target: String,
+    #[serde(default = "default_measurement_profile")]
+    pub profile: MeasurementProfile,
+    #[serde(default = "default_bandwidth_provider_name")]
+    pub bandwidth_provider: String,
     pub samples: u32,
     pub created_at_unix_ms: u128,
     pub ping: ProbeOutcome<PingSummary>,
@@ -78,6 +269,8 @@ pub struct DnsSummary {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BandwidthSummary {
+    #[serde(default = "default_bandwidth_provider_name")]
+    pub provider: String,
     pub download_mbps: f64,
     pub upload_mbps: f64,
     pub download: MetricStats,
@@ -86,6 +279,10 @@ pub struct BandwidthSummary {
     pub upload_runs: Vec<TransferSample>,
     pub download_bytes: u64,
     pub upload_bytes: u64,
+    #[serde(default = "default_download_size_bytes")]
+    pub download_size_bytes: usize,
+    #[serde(default = "default_upload_size_bytes")]
+    pub upload_size_bytes: usize,
     pub runs: u32,
     pub download_streams: u32,
     pub upload_streams: u32,
@@ -118,6 +315,8 @@ pub async fn run_probe_suite(options: &ProbeOptions) -> Result<ProbeReport> {
 
     Ok(ProbeReport {
         target: options.target.clone(),
+        profile: options.profile,
+        bandwidth_provider: options.bandwidth.provider.to_string(),
         samples: options.samples,
         created_at_unix_ms: SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -142,7 +341,10 @@ pub fn format_report(report: &ProbeReport) -> String {
         env!("CARGO_PKG_VERSION"),
         report.target
     ));
-    output.push_str(&format!("Samples: {}\n\n", report.samples));
+    output.push_str(&format!(
+        "Profile: {} | Samples: {} | Bandwidth provider: {}\n\n",
+        report.profile, report.samples, report.bandwidth_provider
+    ));
 
     output.push_str("Ping\n");
     output.push_str(&format_outcome(&report.ping, |ping| {
@@ -194,6 +396,11 @@ pub fn format_report(report: &ProbeReport) -> String {
                 "  runs/streams: {} runs, {} down streams, {} up streams",
                 bandwidth.runs, bandwidth.download_streams, bandwidth.upload_streams
             ),
+            format!(
+                "  payload sizing: {} down bytes, {} up bytes",
+                bandwidth.download_size_bytes, bandwidth.upload_size_bytes
+            ),
+            format!("  provider: {}", bandwidth.provider),
             format!("  download source: {}", bandwidth.download_url),
             format!("  upload source: {}", bandwidth.upload_url),
         ]
@@ -399,6 +606,7 @@ async fn measure_bandwidth(config: &BandwidthConfig) -> Result<BandwidthSummary>
     let upload_bytes = upload_runs.iter().map(|sample| sample.bytes).sum();
 
     Ok(BandwidthSummary {
+        provider: config.provider.to_string(),
         download_mbps: download.median,
         upload_mbps: upload.median,
         download,
@@ -407,6 +615,8 @@ async fn measure_bandwidth(config: &BandwidthConfig) -> Result<BandwidthSummary>
         upload_runs,
         download_bytes,
         upload_bytes,
+        download_size_bytes: config.download_size_bytes,
+        upload_size_bytes: config.upload_size_bytes,
         runs,
         download_streams,
         upload_streams,
@@ -571,7 +781,10 @@ fn split_size(total_size: usize, streams: u32) -> usize {
 
 #[cfg(test)]
 mod tests {
-    use super::{calculate_jitter_ms, calculate_stats, parse_ping_output, split_size};
+    use super::{
+        calculate_jitter_ms, calculate_stats, parse_ping_output, resolve_probe_options, split_size,
+        BandwidthProviderPreset, MeasurementProfile, ProbeOverrides, CLOUDFLARE_UPLOAD_URL,
+    };
 
     #[test]
     fn parses_unix_ping_output_into_structured_stats() {
@@ -632,5 +845,80 @@ Reply from 1.1.1.1: bytes=32 time=2ms TTL=59
         assert_eq!(split_size(1_000_000, 2), 500_000);
         assert_eq!(split_size(1_000_001, 2), 500_001);
         assert_eq!(split_size(10, 0), 10);
+    }
+
+    #[test]
+    fn resolves_standard_cloudflare_defaults() {
+        let options = resolve_probe_options(ProbeOverrides {
+            target: "1.1.1.1".to_string(),
+            profile: MeasurementProfile::Standard,
+            provider: BandwidthProviderPreset::Cloudflare,
+            samples: None,
+            download_url: None,
+            upload_url: None,
+            download_size_bytes: None,
+            upload_size_bytes: None,
+            bandwidth_runs: None,
+            download_streams: None,
+            upload_streams: None,
+        })
+        .expect("probe options should resolve");
+
+        assert_eq!(options.profile, MeasurementProfile::Standard);
+        assert_eq!(options.samples, 5);
+        assert_eq!(
+            options.bandwidth.provider,
+            BandwidthProviderPreset::Cloudflare
+        );
+        assert_eq!(
+            options.bandwidth.download_url,
+            "https://speed.cloudflare.com/__down?bytes=4000000"
+        );
+        assert_eq!(options.bandwidth.upload_url, CLOUDFLARE_UPLOAD_URL);
+    }
+
+    #[test]
+    fn explicit_urls_switch_to_custom_provider() {
+        let options = resolve_probe_options(ProbeOverrides {
+            target: "example.com".to_string(),
+            profile: MeasurementProfile::Quick,
+            provider: BandwidthProviderPreset::Cloudflare,
+            samples: None,
+            download_url: Some("https://downloads.example.test/file.bin".to_string()),
+            upload_url: Some("https://uploads.example.test".to_string()),
+            download_size_bytes: Some(9_000_000),
+            upload_size_bytes: Some(2_000_000),
+            bandwidth_runs: Some(2),
+            download_streams: Some(3),
+            upload_streams: Some(2),
+        })
+        .expect("probe options should resolve");
+
+        assert_eq!(options.bandwidth.provider, BandwidthProviderPreset::Custom);
+        assert_eq!(
+            options.bandwidth.download_url,
+            "https://downloads.example.test/file.bin"
+        );
+        assert_eq!(options.bandwidth.upload_url, "https://uploads.example.test");
+    }
+
+    #[test]
+    fn custom_provider_requires_both_urls() {
+        let error = resolve_probe_options(ProbeOverrides {
+            target: "example.com".to_string(),
+            profile: MeasurementProfile::Standard,
+            provider: BandwidthProviderPreset::Custom,
+            samples: None,
+            download_url: Some("https://downloads.example.test/file.bin".to_string()),
+            upload_url: None,
+            download_size_bytes: None,
+            upload_size_bytes: None,
+            bandwidth_runs: None,
+            download_streams: None,
+            upload_streams: None,
+        })
+        .expect_err("custom provider should require both urls");
+
+        assert!(error.to_string().contains("--upload-url"));
     }
 }
