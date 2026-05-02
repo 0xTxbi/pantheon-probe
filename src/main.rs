@@ -21,11 +21,11 @@ async fn main() -> Result<()> {
 
     match cli.command {
         Commands::Run(args) => {
-            let output = run_and_store(args.probe.to_probe_options()).await;
+            let output = run_and_store(args.probe.to_probe_options()?).await;
             print_output(&output, args.json)?;
         }
         Commands::Watch(args) => {
-            let probe_options = args.probe.to_probe_options();
+            let probe_options = args.probe.to_probe_options()?;
             let mut run_number = 1_u64;
 
             loop {
@@ -40,7 +40,7 @@ async fn main() -> Result<()> {
             }
         }
         Commands::Tui(args) => {
-            tui::run_tui(args.probe.to_probe_options(), args.interval).await?;
+            tui::run_tui(args.probe.to_probe_options()?, args.interval).await?;
         }
         Commands::History(args) => {
             let runs = list_runs(args.target.as_deref(), args.limit)?;
