@@ -21,6 +21,12 @@ Run a measurement:
 pantheon-probe run -t 1.1.1.1
 ```
 
+Run a fuller bandwidth test profile:
+
+```sh
+pantheon-probe run -t 1.1.1.1 --profile full
+```
+
 Watch repeated measurements:
 
 ```sh
@@ -63,6 +69,15 @@ Use JSON output for automation:
 pantheon-probe run -t 1.1.1.1 --json
 ```
 
+Use custom throughput endpoints:
+
+```sh
+pantheon-probe run -t example.com \
+  --provider custom \
+  --download-url https://downloads.example.com/file.bin \
+  --upload-url https://uploads.example.com/sink
+```
+
 ## Storage
 
 PantheonProbe saves probe runs under `~/.pantheon-probe/runs` by default.
@@ -78,13 +93,15 @@ PANTHEON_PROBE_HOME=/path/to/data pantheon-probe history
 - `ping`: sent, received, packet loss, min, avg, median, p95, max, stddev, and
   jitter
 - `dns`: resolution time and resolved addresses
-- `bandwidth`: repeated HTTP download and upload runs with aggregate stats
+- `bandwidth`: profile-driven HTTP download and upload runs with provider-aware
+  sizing and aggregate stats
 
 ## Notes
 
 - Ping measurements currently shell out to the system `ping` command.
-- Throughput checks use configurable HTTP endpoints and default to Cloudflare
-  speed test URLs.
+- Throughput checks support `quick`, `standard`, and `full` profiles.
+- The built-in bandwidth provider defaults to Cloudflare speed test URLs, and
+  custom endpoints can override it.
 
 ## Issues
 

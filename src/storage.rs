@@ -205,10 +205,12 @@ pub fn format_history(runs: &[StoredRun]) -> String {
     runs.iter()
         .map(|run| {
             format!(
-                "{} | {} | target: {} | ping avg: {} | download: {} | upload: {}",
+                "{} | {} | target: {} | profile: {} | provider: {} | ping avg: {} | download: {} | upload: {}",
                 run.id,
                 run.report.created_at_unix_ms,
                 run.target,
+                run.report.profile,
+                run.report.bandwidth_provider,
                 format_optional(
                     run.report
                         .ping
@@ -294,14 +296,16 @@ pub fn export_runs_json(runs: &[StoredRun]) -> Result<String> {
 
 pub fn export_runs_csv(runs: &[StoredRun]) -> String {
     let mut output = String::from(
-        "created_at_unix_ms,target,ping_avg_ms,ping_median_ms,ping_p95_ms,packet_loss_pct,dns_resolution_ms,download_mbps,upload_mbps\n",
+        "created_at_unix_ms,target,profile,bandwidth_provider,ping_avg_ms,ping_median_ms,ping_p95_ms,packet_loss_pct,dns_resolution_ms,download_mbps,upload_mbps\n",
     );
 
     for run in runs {
         output.push_str(&format!(
-            "{},{},{},{},{},{},{},{},{}\n",
+            "{},{},{},{},{},{},{},{},{},{},{}\n",
             run.report.created_at_unix_ms,
             csv_escape(&run.target),
+            run.report.profile,
+            csv_escape(&run.report.bandwidth_provider),
             csv_number(
                 run.report
                     .ping
@@ -441,8 +445,8 @@ mod tests {
         format_history, sanitize_target, ComparedRuns, StoredRun,
     };
     use crate::probe::{
-        BandwidthSummary, DnsSummary, MetricStats, PingSummary, ProbeOutcome, ProbeReport,
-        TransferSample,
+        BandwidthProviderPreset, BandwidthSummary, DnsSummary, MeasurementProfile, MetricStats,
+        PingSummary, ProbeOutcome, ProbeReport, TransferSample,
     };
 
     #[test]
@@ -466,6 +470,7 @@ mod tests {
         let history = format_history(&[fixture_run(42)]);
         assert!(history.contains("42-example-com"));
         assert!(history.contains("target: example.com"));
+        assert!(history.contains("profile: standard"));
     }
 
     #[test]
@@ -510,6 +515,8 @@ mod tests {
             target: "example.com".to_string(),
             report: ProbeReport {
                 target: "example.com".to_string(),
+                profile: MeasurementProfile::Standard,
+                bandwidth_provider: BandwidthProviderPreset::Cloudflare.to_string(),
                 samples: 5,
                 created_at_unix_ms,
                 ping: ProbeOutcome {
@@ -537,6 +544,7 @@ mod tests {
                 },
                 bandwidth: ProbeOutcome {
                     value: Some(BandwidthSummary {
+                        provider: BandwidthProviderPreset::Cloudflare.to_string(),
                         download_mbps: 50.0,
                         upload_mbps: 20.0,
                         download: MetricStats {
@@ -569,6 +577,8 @@ mod tests {
                         }],
                         download_bytes: 4_000_000,
                         upload_bytes: 1_000_000,
+                        download_size_bytes: 4_000_000,
+                        upload_size_bytes: 1_000_000,
                         runs: 1,
                         download_streams: 2,
                         upload_streams: 2,
