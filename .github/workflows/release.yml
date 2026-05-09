@@ -157,11 +157,6 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Download built artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: dist
-
       - name: Publish crate to crates.io
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
@@ -170,7 +165,8 @@ jobs:
           set -euo pipefail
           version="${{ needs.prepare.outputs.version }}"
           crate_status="$(
-            curl -fsS -o /tmp/pantheon-probe-crate.json -w "%{http_code}" \
+            curl -sS -o /tmp/pantheon-probe-crate.json -w "%{http_code}" \
+              -H "User-Agent: pantheon-probe-release-bot (https://github.com/0xTxbi/pantheon-probe)" \
               "https://crates.io/api/v1/crates/pantheon-probe/${version}" || true
           )"
 
@@ -185,6 +181,11 @@ jobs:
           fi
 
           cargo publish --locked
+
+      - name: Download built artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
 
       - name: Create or update GitHub release
         env:
