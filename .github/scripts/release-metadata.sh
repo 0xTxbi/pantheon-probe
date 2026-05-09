@@ -70,6 +70,7 @@ sanitize_pr_body() {
   sed $'s/\r$//'
 }
 
+release_notes_source_sha="$sha"
 latest_tag="$(
   git tag --list \
     | sort -V \
@@ -78,6 +79,19 @@ latest_tag="$(
 
 previous_version=""
 if [[ -n "$latest_tag" ]]; then
+  while IFS= read -r commit_sha; do
+    commit_version="$(
+      git show "${commit_sha}:Cargo.toml" 2>/dev/null \
+        | sed -n 's/^version = "\(.*\)"/\1/p' \
+        | head -n 1
+    )"
+
+    if [[ "$commit_version" == "$version" ]]; then
+      release_notes_source_sha="$commit_sha"
+      break
+    fi
+  done < <(git log --reverse --format='%H' "${latest_tag}..${sha}" -- Cargo.toml)
+
   previous_version="$(
     git show "${latest_tag}:Cargo.toml" 2>/dev/null \
       | sed -n 's/^version = "\(.*\)"/\1/p' \
@@ -113,7 +127,8 @@ fi
 
 crate_published=false
 crate_status="$(
-  curl -fsS -o /tmp/pantheon-probe-crate.json -w "%{http_code}" \
+  curl -sS -o /tmp/pantheon-probe-crate.json -w "%{http_code}" \
+    -H "User-Agent: pantheon-probe-release-bot (https://github.com/0xTxbi/pantheon-probe)" \
     "https://crates.io/api/v1/crates/pantheon-probe/${version}" || true
 )"
 if [[ "$crate_status" == "200" ]]; then
@@ -130,7 +145,7 @@ if [[ "$already_released" == true || "$version_bumped" == false || "$has_releasa
   should_release=false
 fi
 
-pr_json="$(gh api -H "Accept: application/vnd.github+json" "repos/${repo}/commits/${sha}/pulls" 2>/dev/null || printf '[]')"
+pr_json="$(gh api -H "Accept: application/vnd.github+json" "repos/${repo}/commits/${release_notes_source_sha}/pulls" 2>/dev/null || printf '[]')"
 pr_title="$(jq -r '.[0].title // ""' <<<"$pr_json")"
 pr_body="$(jq -r '.[0].body // ""' <<<"$pr_json" | sanitize_pr_body)"
 
