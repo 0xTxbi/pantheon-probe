@@ -7,7 +7,7 @@ mod version;
 use anyhow::Result;
 use clap::Parser;
 use cli::{Cli, Commands, CompareArgs, ExportFormat};
-use probe::{format_report, run_probe_suite};
+use probe::{format_provider_catalog, format_report, provider_catalog, run_probe_suite};
 use serde::Serialize;
 use storage::{
     compare_latest_runs, compare_reports, compare_run_ids, export_runs_csv, export_runs_json,
@@ -41,6 +41,14 @@ async fn main() -> Result<()> {
         }
         Commands::Tui(args) => {
             tui::run_tui(args.probe.to_probe_options()?, args.interval).await?;
+        }
+        Commands::Providers(args) => {
+            let providers = provider_catalog();
+            if args.json {
+                println!("{}", serde_json::to_string_pretty(&providers)?);
+            } else {
+                println!("{}", format_provider_catalog(&providers));
+            }
         }
         Commands::History(args) => {
             let runs = list_runs(args.target.as_deref(), args.limit)?;
