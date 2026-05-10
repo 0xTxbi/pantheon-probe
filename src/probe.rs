@@ -1,6 +1,6 @@
 use anyhow::{anyhow, Context, Result};
 use clap::ValueEnum;
-use reqwest::Client;
+use reqwest::{header::RANGE, Client};
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::net::{IpAddr, ToSocketAddrs};
@@ -9,6 +9,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::task::JoinSet;
 
 const CLOUDFLARE_UPLOAD_URL: &str = "https://speed.cloudflare.com/__up";
+const DEFAULT_ENDPOINT_NAME: &str = "global";
 
 #[derive(Debug, Clone)]
 pub struct ProbeOptions {
@@ -21,8 +22,8 @@ pub struct ProbeOptions {
 #[derive(Debug, Clone)]
 pub struct BandwidthConfig {
     pub provider: BandwidthProviderPreset,
-    pub download_url: String,
-    pub upload_url: String,
+    pub endpoint: Option<String>,
+    pub endpoints: Vec<BandwidthEndpoint>,
     pub download_size_bytes: usize,
     pub upload_size_bytes: usize,
     pub runs: u32,
@@ -35,14 +36,29 @@ pub struct ProbeOverrides {
     pub target: String,
     pub profile: MeasurementProfile,
     pub provider: BandwidthProviderPreset,
+    pub endpoint: Option<String>,
     pub samples: Option<u32>,
-    pub download_url: Option<String>,
-    pub upload_url: Option<String>,
+    pub download_urls: Vec<String>,
+    pub upload_urls: Vec<String>,
     pub download_size_bytes: Option<usize>,
     pub upload_size_bytes: Option<usize>,
     pub bandwidth_runs: Option<u32>,
     pub download_streams: Option<u32>,
     pub upload_streams: Option<u32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BandwidthEndpoint {
+    pub name: String,
+    pub download_url: String,
+    pub upload_url: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ProviderCatalogEntry {
+    pub provider: BandwidthProviderPreset,
+    pub endpoints: Vec<String>,
+    pub profiles: Vec<MeasurementProfile>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ValueEnum)]
@@ -120,6 +136,55 @@ impl fmt::Display for BandwidthProviderPreset {
     }
 }
 
+pub fn provider_catalog() -> Vec<ProviderCatalogEntry> {
+    vec![
+        ProviderCatalogEntry {
+            provider: BandwidthProviderPreset::Cloudflare,
+            endpoints: cloudflare_endpoints(
+                MeasurementProfile::Standard.defaults().download_size_bytes,
+            )
+            .into_iter()
+            .map(|endpoint| endpoint.name)
+            .collect(),
+            profiles: vec![
+                MeasurementProfile::Quick,
+                MeasurementProfile::Standard,
+                MeasurementProfile::Full,
+            ],
+        },
+        ProviderCatalogEntry {
+            provider: BandwidthProviderPreset::Custom,
+            endpoints: vec!["custom-1".to_string()],
+            profiles: vec![
+                MeasurementProfile::Quick,
+                MeasurementProfile::Standard,
+                MeasurementProfile::Full,
+            ],
+        },
+    ]
+}
+
+pub fn format_provider_catalog(entries: &[ProviderCatalogEntry]) -> String {
+    entries
+        .iter()
+        .map(|entry| {
+            let endpoints = entry.endpoints.join(", ");
+            let profiles = entry
+                .profiles
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join(", ");
+
+            format!(
+                "{} | endpoints: {} | profiles: {}",
+                entry.provider, endpoints, profiles
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 pub fn resolve_probe_options(overrides: ProbeOverrides) -> Result<ProbeOptions> {
     let defaults = overrides.profile.defaults();
     let samples = overrides.samples.unwrap_or(defaults.samples).max(1);
@@ -144,33 +209,29 @@ pub fn resolve_probe_options(overrides: ProbeOverrides) -> Result<ProbeOptions> 
         .unwrap_or(defaults.upload_streams)
         .max(1);
 
-    let has_download_override = overrides.download_url.is_some();
-    let has_upload_override = overrides.upload_url.is_some();
-    if has_download_override ^ has_upload_override {
+    let has_download_overrides = !overrides.download_urls.is_empty();
+    let has_upload_overrides = !overrides.upload_urls.is_empty();
+    if has_download_overrides ^ has_upload_overrides {
         anyhow::bail!(
             "provide both --download-url and --upload-url when overriding bandwidth endpoints"
         );
     }
 
-    let provider = if has_download_override {
+    if has_download_overrides && overrides.download_urls.len() != overrides.upload_urls.len() {
+        anyhow::bail!("provide the same number of --download-url and --upload-url values");
+    }
+
+    let provider = if has_download_overrides {
         BandwidthProviderPreset::Custom
     } else {
         overrides.provider
     };
 
-    let (download_url, upload_url) = match provider {
-        BandwidthProviderPreset::Cloudflare => (
-            build_cloudflare_download_url(download_size_bytes),
-            CLOUDFLARE_UPLOAD_URL.to_string(),
-        ),
-        BandwidthProviderPreset::Custom => (
-            overrides
-                .download_url
-                .ok_or_else(|| anyhow!("custom provider requires --download-url"))?,
-            overrides
-                .upload_url
-                .ok_or_else(|| anyhow!("custom provider requires --upload-url"))?,
-        ),
+    let endpoints = match provider {
+        BandwidthProviderPreset::Cloudflare => cloudflare_endpoints(download_size_bytes),
+        BandwidthProviderPreset::Custom => {
+            custom_endpoints(&overrides.download_urls, &overrides.upload_urls)?
+        }
     };
 
     Ok(ProbeOptions {
@@ -179,8 +240,8 @@ pub fn resolve_probe_options(overrides: ProbeOverrides) -> Result<ProbeOptions> 
         samples,
         bandwidth: BandwidthConfig {
             provider,
-            download_url,
-            upload_url,
+            endpoint: overrides.endpoint,
+            endpoints,
             download_size_bytes,
             upload_size_bytes,
             runs,
@@ -194,12 +255,44 @@ fn build_cloudflare_download_url(bytes: usize) -> String {
     format!("https://speed.cloudflare.com/__down?bytes={bytes}")
 }
 
+fn cloudflare_endpoints(download_size_bytes: usize) -> Vec<BandwidthEndpoint> {
+    vec![BandwidthEndpoint {
+        name: DEFAULT_ENDPOINT_NAME.to_string(),
+        download_url: build_cloudflare_download_url(download_size_bytes),
+        upload_url: CLOUDFLARE_UPLOAD_URL.to_string(),
+    }]
+}
+
+fn custom_endpoints(
+    download_urls: &[String],
+    upload_urls: &[String],
+) -> Result<Vec<BandwidthEndpoint>> {
+    if download_urls.is_empty() {
+        anyhow::bail!("custom provider requires --download-url");
+    }
+
+    Ok(download_urls
+        .iter()
+        .zip(upload_urls.iter())
+        .enumerate()
+        .map(|(index, (download_url, upload_url))| BandwidthEndpoint {
+            name: format!("custom-{}", index + 1),
+            download_url: download_url.clone(),
+            upload_url: upload_url.clone(),
+        })
+        .collect())
+}
+
 fn default_measurement_profile() -> MeasurementProfile {
     MeasurementProfile::Standard
 }
 
 fn default_bandwidth_provider_name() -> String {
     BandwidthProviderPreset::Cloudflare.to_string()
+}
+
+fn default_endpoint_name() -> String {
+    DEFAULT_ENDPOINT_NAME.to_string()
 }
 
 fn default_download_size_bytes() -> usize {
@@ -271,6 +364,12 @@ pub struct DnsSummary {
 pub struct BandwidthSummary {
     #[serde(default = "default_bandwidth_provider_name")]
     pub provider: String,
+    #[serde(default = "default_endpoint_name")]
+    pub endpoint: String,
+    #[serde(default)]
+    pub endpoint_latency_ms: Option<f64>,
+    #[serde(default)]
+    pub endpoint_candidates: Vec<EndpointHealth>,
     pub download_mbps: f64,
     pub upload_mbps: f64,
     pub download: MetricStats,
@@ -288,6 +387,15 @@ pub struct BandwidthSummary {
     pub upload_streams: u32,
     pub download_url: String,
     pub upload_url: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EndpointHealth {
+    pub name: String,
+    pub download_url: String,
+    pub upload_url: String,
+    pub latency_ms: Option<f64>,
+    pub error: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -400,7 +508,14 @@ pub fn format_report(report: &ProbeReport) -> String {
                 "  payload sizing: {} down bytes, {} up bytes",
                 bandwidth.download_size_bytes, bandwidth.upload_size_bytes
             ),
-            format!("  provider: {}", bandwidth.provider),
+            format!(
+                "  provider/endpoint: {}/{}",
+                bandwidth.provider, bandwidth.endpoint
+            ),
+            format!(
+                "  endpoint latency: {}",
+                format_optional_value(bandwidth.endpoint_latency_ms, "ms")
+            ),
             format!("  download source: {}", bandwidth.download_url),
             format!("  upload source: {}", bandwidth.upload_url),
         ]
@@ -431,6 +546,12 @@ fn format_optional_triplet(
         }
         _ => "unavailable".to_string(),
     }
+}
+
+fn format_optional_value(value: Option<f64>, unit: &str) -> String {
+    value
+        .map(|value| format!("{value:.2} {unit}"))
+        .unwrap_or_else(|| "unavailable".to_string())
 }
 
 fn measure_ping(target: &str, samples: u32) -> Result<PingSummary> {
@@ -572,6 +693,7 @@ async fn measure_bandwidth(config: &BandwidthConfig) -> Result<BandwidthSummary>
         .build()
         .context("failed to build HTTP client for bandwidth probe")?;
 
+    let selected = select_bandwidth_endpoint(&client, config).await?;
     let runs = config.runs.max(1);
     let download_streams = config.download_streams.max(1);
     let upload_streams = config.upload_streams.max(1);
@@ -580,21 +702,29 @@ async fn measure_bandwidth(config: &BandwidthConfig) -> Result<BandwidthSummary>
 
     for _ in 0..runs {
         download_runs.push(
-            download_sample(&client, &config.download_url, download_streams)
+            download_sample(&client, &selected.endpoint.download_url, download_streams)
                 .await
                 .with_context(|| {
                     format!(
                         "download throughput check failed for {}",
-                        config.download_url
+                        selected.endpoint.download_url
                     )
                 })?,
         );
         upload_runs.push(
-            upload_sample(&client, config, upload_streams)
-                .await
-                .with_context(|| {
-                    format!("upload throughput check failed for {}", config.upload_url)
-                })?,
+            upload_sample(
+                &client,
+                &selected.endpoint.upload_url,
+                config.upload_size_bytes,
+                upload_streams,
+            )
+            .await
+            .with_context(|| {
+                format!(
+                    "upload throughput check failed for {}",
+                    selected.endpoint.upload_url
+                )
+            })?,
         );
     }
 
@@ -607,6 +737,9 @@ async fn measure_bandwidth(config: &BandwidthConfig) -> Result<BandwidthSummary>
 
     Ok(BandwidthSummary {
         provider: config.provider.to_string(),
+        endpoint: selected.endpoint.name,
+        endpoint_latency_ms: selected.latency_ms,
+        endpoint_candidates: selected.candidates,
         download_mbps: download.median,
         upload_mbps: upload.median,
         download,
@@ -620,9 +753,112 @@ async fn measure_bandwidth(config: &BandwidthConfig) -> Result<BandwidthSummary>
         runs,
         download_streams,
         upload_streams,
-        download_url: config.download_url.clone(),
-        upload_url: config.upload_url.clone(),
+        download_url: selected.endpoint.download_url,
+        upload_url: selected.endpoint.upload_url,
     })
+}
+
+struct SelectedEndpoint {
+    endpoint: BandwidthEndpoint,
+    latency_ms: Option<f64>,
+    candidates: Vec<EndpointHealth>,
+}
+
+async fn select_bandwidth_endpoint(
+    client: &Client,
+    config: &BandwidthConfig,
+) -> Result<SelectedEndpoint> {
+    let requested_endpoint = config.endpoint.as_deref();
+    let candidates = match requested_endpoint {
+        Some(endpoint) => config
+            .endpoints
+            .iter()
+            .filter(|candidate| candidate.name == endpoint)
+            .cloned()
+            .collect::<Vec<_>>(),
+        None => config.endpoints.clone(),
+    };
+
+    if candidates.is_empty() {
+        let requested = requested_endpoint.unwrap_or("auto");
+        anyhow::bail!(
+            "no bandwidth endpoints are available for provider {} and endpoint {}",
+            config.provider,
+            requested
+        );
+    }
+
+    let mut health = Vec::with_capacity(candidates.len());
+    for endpoint in &candidates {
+        health.push(check_endpoint_health(client, endpoint).await);
+    }
+
+    let selected = health
+        .iter()
+        .filter_map(|candidate| candidate.latency_ms.map(|latency| (candidate, latency)))
+        .min_by(|left, right| left.1.total_cmp(&right.1))
+        .map(|(candidate, latency)| (candidate.name.clone(), latency));
+
+    let (endpoint_name, latency_ms) = selected.ok_or_else(|| {
+        let errors = health
+            .iter()
+            .filter_map(|candidate| {
+                candidate
+                    .error
+                    .as_ref()
+                    .map(|error| format!("{}: {}", candidate.name, error))
+            })
+            .collect::<Vec<_>>()
+            .join("; ");
+
+        anyhow!("all bandwidth endpoint health checks failed: {errors}")
+    })?;
+
+    let endpoint = candidates
+        .into_iter()
+        .find(|candidate| candidate.name == endpoint_name)
+        .expect("selected endpoint exists in candidate list");
+
+    Ok(SelectedEndpoint {
+        endpoint,
+        latency_ms: Some(latency_ms),
+        candidates: health,
+    })
+}
+
+async fn check_endpoint_health(client: &Client, endpoint: &BandwidthEndpoint) -> EndpointHealth {
+    let started = Instant::now();
+    let result = client
+        .get(&endpoint.download_url)
+        .header(RANGE, "bytes=0-1023")
+        .send()
+        .await
+        .with_context(|| format!("failed to reach {}", endpoint.download_url))
+        .and_then(|response| {
+            response.error_for_status().map(|_| ()).with_context(|| {
+                format!(
+                    "health check returned an error for {}",
+                    endpoint.download_url
+                )
+            })
+        });
+
+    match result {
+        Ok(()) => EndpointHealth {
+            name: endpoint.name.clone(),
+            download_url: endpoint.download_url.clone(),
+            upload_url: endpoint.upload_url.clone(),
+            latency_ms: Some(duration_to_ms(started.elapsed())),
+            error: None,
+        },
+        Err(error) => EndpointHealth {
+            name: endpoint.name.clone(),
+            download_url: endpoint.download_url.clone(),
+            upload_url: endpoint.upload_url.clone(),
+            latency_ms: None,
+            error: Some(error.to_string()),
+        },
+    }
 }
 
 async fn download_sample(client: &Client, url: &str, streams: u32) -> Result<TransferSample> {
@@ -652,16 +888,17 @@ async fn download_sample(client: &Client, url: &str, streams: u32) -> Result<Tra
 
 async fn upload_sample(
     client: &Client,
-    config: &BandwidthConfig,
+    upload_url: &str,
+    upload_size_bytes: usize,
     streams: u32,
 ) -> Result<TransferSample> {
     let started = Instant::now();
     let mut tasks = JoinSet::new();
-    let stream_payload_size = split_size(config.upload_size_bytes, streams);
+    let stream_payload_size = split_size(upload_size_bytes, streams);
 
     for _ in 0..streams {
         let client = client.clone();
-        let upload_url = config.upload_url.clone();
+        let upload_url = upload_url.to_string();
         tasks.spawn(async move { upload_bytes(&client, &upload_url, stream_payload_size).await });
     }
 
@@ -782,8 +1019,9 @@ fn split_size(total_size: usize, streams: u32) -> usize {
 #[cfg(test)]
 mod tests {
     use super::{
-        calculate_jitter_ms, calculate_stats, parse_ping_output, resolve_probe_options, split_size,
-        BandwidthProviderPreset, MeasurementProfile, ProbeOverrides, CLOUDFLARE_UPLOAD_URL,
+        calculate_jitter_ms, calculate_stats, format_provider_catalog, parse_ping_output,
+        provider_catalog, resolve_probe_options, split_size, BandwidthProviderPreset,
+        MeasurementProfile, ProbeOverrides, CLOUDFLARE_UPLOAD_URL,
     };
 
     #[test]
@@ -853,9 +1091,10 @@ Reply from 1.1.1.1: bytes=32 time=2ms TTL=59
             target: "1.1.1.1".to_string(),
             profile: MeasurementProfile::Standard,
             provider: BandwidthProviderPreset::Cloudflare,
+            endpoint: None,
             samples: None,
-            download_url: None,
-            upload_url: None,
+            download_urls: Vec::new(),
+            upload_urls: Vec::new(),
             download_size_bytes: None,
             upload_size_bytes: None,
             bandwidth_runs: None,
@@ -871,10 +1110,13 @@ Reply from 1.1.1.1: bytes=32 time=2ms TTL=59
             BandwidthProviderPreset::Cloudflare
         );
         assert_eq!(
-            options.bandwidth.download_url,
+            options.bandwidth.endpoints[0].download_url,
             "https://speed.cloudflare.com/__down?bytes=4000000"
         );
-        assert_eq!(options.bandwidth.upload_url, CLOUDFLARE_UPLOAD_URL);
+        assert_eq!(
+            options.bandwidth.endpoints[0].upload_url,
+            CLOUDFLARE_UPLOAD_URL
+        );
     }
 
     #[test]
@@ -883,9 +1125,10 @@ Reply from 1.1.1.1: bytes=32 time=2ms TTL=59
             target: "example.com".to_string(),
             profile: MeasurementProfile::Quick,
             provider: BandwidthProviderPreset::Cloudflare,
+            endpoint: None,
             samples: None,
-            download_url: Some("https://downloads.example.test/file.bin".to_string()),
-            upload_url: Some("https://uploads.example.test".to_string()),
+            download_urls: vec!["https://downloads.example.test/file.bin".to_string()],
+            upload_urls: vec!["https://uploads.example.test".to_string()],
             download_size_bytes: Some(9_000_000),
             upload_size_bytes: Some(2_000_000),
             bandwidth_runs: Some(2),
@@ -896,10 +1139,51 @@ Reply from 1.1.1.1: bytes=32 time=2ms TTL=59
 
         assert_eq!(options.bandwidth.provider, BandwidthProviderPreset::Custom);
         assert_eq!(
-            options.bandwidth.download_url,
+            options.bandwidth.endpoints[0].download_url,
             "https://downloads.example.test/file.bin"
         );
-        assert_eq!(options.bandwidth.upload_url, "https://uploads.example.test");
+        assert_eq!(
+            options.bandwidth.endpoints[0].upload_url,
+            "https://uploads.example.test"
+        );
+    }
+
+    #[test]
+    fn custom_provider_accepts_multiple_endpoint_candidates() {
+        let options = resolve_probe_options(ProbeOverrides {
+            target: "example.com".to_string(),
+            profile: MeasurementProfile::Quick,
+            provider: BandwidthProviderPreset::Custom,
+            endpoint: Some("custom-2".to_string()),
+            samples: None,
+            download_urls: vec![
+                "https://downloads.example.test/a.bin".to_string(),
+                "https://downloads.example.test/b.bin".to_string(),
+            ],
+            upload_urls: vec![
+                "https://uploads.example.test/a".to_string(),
+                "https://uploads.example.test/b".to_string(),
+            ],
+            download_size_bytes: None,
+            upload_size_bytes: None,
+            bandwidth_runs: None,
+            download_streams: None,
+            upload_streams: None,
+        })
+        .expect("probe options should resolve");
+
+        assert_eq!(options.bandwidth.endpoint.as_deref(), Some("custom-2"));
+        assert_eq!(options.bandwidth.endpoints.len(), 2);
+        assert_eq!(options.bandwidth.endpoints[1].name, "custom-2");
+    }
+
+    #[test]
+    fn formats_provider_catalog() {
+        let formatted = format_provider_catalog(&provider_catalog());
+
+        assert!(formatted.contains("cloudflare | endpoints: global"));
+        assert!(formatted.contains("custom | endpoints: custom-1"));
+        assert!(formatted.contains("profiles: quick, standard, full"));
     }
 
     #[test]
@@ -908,9 +1192,10 @@ Reply from 1.1.1.1: bytes=32 time=2ms TTL=59
             target: "example.com".to_string(),
             profile: MeasurementProfile::Standard,
             provider: BandwidthProviderPreset::Custom,
+            endpoint: None,
             samples: None,
-            download_url: Some("https://downloads.example.test/file.bin".to_string()),
-            upload_url: None,
+            download_urls: vec!["https://downloads.example.test/file.bin".to_string()],
+            upload_urls: Vec::new(),
             download_size_bytes: None,
             upload_size_bytes: None,
             bandwidth_runs: None,
