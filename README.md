@@ -39,6 +39,12 @@ Launch the terminal dashboard:
 pantheon-probe tui -t 1.1.1.1 --interval 30
 ```
 
+Show available throughput providers and profiles:
+
+```sh
+pantheon-probe providers
+```
+
 Show recent saved runs:
 
 ```sh
@@ -78,6 +84,16 @@ pantheon-probe run -t example.com \
   --upload-url https://uploads.example.com/sink
 ```
 
+Use multiple custom endpoint candidates:
+
+```sh
+pantheon-probe run -t example.com \
+  --download-url https://downloads.example.com/a.bin \
+  --upload-url https://uploads.example.com/a \
+  --download-url https://downloads.example.com/b.bin \
+  --upload-url https://uploads.example.com/b
+```
+
 ## Storage
 
 PantheonProbe saves probe runs under `~/.pantheon-probe/runs` by default.
@@ -93,8 +109,9 @@ PANTHEON_PROBE_HOME=/path/to/data pantheon-probe history
 - `ping`: sent, received, packet loss, min, avg, median, p95, max, stddev, and
   jitter
 - `dns`: resolution time and resolved addresses
-- `bandwidth`: profile-driven HTTP download and upload runs with provider-aware
-  sizing and aggregate stats
+- `bandwidth`: profile-driven HTTP download and upload runs with endpoint
+  health checks, provider-aware sizing, selected-endpoint metadata, and
+  aggregate stats
 
 ## Notes
 
@@ -102,6 +119,9 @@ PANTHEON_PROBE_HOME=/path/to/data pantheon-probe history
 - Throughput checks support `quick`, `standard`, and `full` profiles.
 - The built-in bandwidth provider defaults to Cloudflare speed test URLs, and
   custom endpoints can override it.
+- When multiple endpoint candidates are available, PantheonProbe checks
+  endpoint availability first and runs throughput against the lowest-latency
+  healthy endpoint.
 
 ## Issues
 

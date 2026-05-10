@@ -205,12 +205,18 @@ pub fn format_history(runs: &[StoredRun]) -> String {
     runs.iter()
         .map(|run| {
             format!(
-                "{} | {} | target: {} | profile: {} | provider: {} | ping avg: {} | download: {} | upload: {}",
+                "{} | {} | target: {} | profile: {} | provider: {} | endpoint: {} | ping avg: {} | download: {} | upload: {}",
                 run.id,
                 run.report.created_at_unix_ms,
                 run.target,
                 run.report.profile,
                 run.report.bandwidth_provider,
+                run.report
+                    .bandwidth
+                    .value
+                    .as_ref()
+                    .map(|value| value.endpoint.as_str())
+                    .unwrap_or("unavailable"),
                 format_optional(
                     run.report
                         .ping
@@ -296,16 +302,24 @@ pub fn export_runs_json(runs: &[StoredRun]) -> Result<String> {
 
 pub fn export_runs_csv(runs: &[StoredRun]) -> String {
     let mut output = String::from(
-        "created_at_unix_ms,target,profile,bandwidth_provider,ping_avg_ms,ping_median_ms,ping_p95_ms,packet_loss_pct,dns_resolution_ms,download_mbps,upload_mbps\n",
+        "created_at_unix_ms,target,profile,bandwidth_provider,bandwidth_endpoint,ping_avg_ms,ping_median_ms,ping_p95_ms,packet_loss_pct,dns_resolution_ms,download_mbps,upload_mbps\n",
     );
 
     for run in runs {
         output.push_str(&format!(
-            "{},{},{},{},{},{},{},{},{},{},{}\n",
+            "{},{},{},{},{},{},{},{},{},{},{},{}\n",
             run.report.created_at_unix_ms,
             csv_escape(&run.target),
             run.report.profile,
             csv_escape(&run.report.bandwidth_provider),
+            csv_escape(
+                run.report
+                    .bandwidth
+                    .value
+                    .as_ref()
+                    .map(|value| value.endpoint.as_str())
+                    .unwrap_or("")
+            ),
             csv_number(
                 run.report
                     .ping
@@ -471,6 +485,7 @@ mod tests {
         assert!(history.contains("42-example-com"));
         assert!(history.contains("target: example.com"));
         assert!(history.contains("profile: standard"));
+        assert!(history.contains("endpoint: global"));
     }
 
     #[test]
@@ -545,6 +560,9 @@ mod tests {
                 bandwidth: ProbeOutcome {
                     value: Some(BandwidthSummary {
                         provider: BandwidthProviderPreset::Cloudflare.to_string(),
+                        endpoint: "global".to_string(),
+                        endpoint_latency_ms: Some(30.0),
+                        endpoint_candidates: Vec::new(),
                         download_mbps: 50.0,
                         upload_mbps: 20.0,
                         download: MetricStats {

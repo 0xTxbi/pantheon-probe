@@ -26,6 +26,7 @@ pub enum Commands {
     Run(RunArgs),
     Watch(WatchArgs),
     Tui(TuiArgs),
+    Providers(ProvidersArgs),
     History(HistoryArgs),
     Export(ExportArgs),
     Compare(CompareArgs),
@@ -39,12 +40,14 @@ pub struct SharedProbeArgs {
     pub profile: MeasurementProfile,
     #[arg(long, value_enum, default_value_t = BandwidthProviderPreset::Cloudflare)]
     pub provider: BandwidthProviderPreset,
+    #[arg(long)]
+    pub endpoint: Option<String>,
     #[arg(short = 'n', long)]
     pub samples: Option<u32>,
     #[arg(long)]
-    pub download_url: Option<String>,
+    pub download_url: Vec<String>,
     #[arg(long)]
-    pub upload_url: Option<String>,
+    pub upload_url: Vec<String>,
     #[arg(long)]
     pub download_size_bytes: Option<usize>,
     #[arg(long)]
@@ -63,9 +66,10 @@ impl SharedProbeArgs {
             target: self.target.clone(),
             profile: self.profile,
             provider: self.provider,
+            endpoint: self.endpoint.clone(),
             samples: self.samples,
-            download_url: self.download_url.clone(),
-            upload_url: self.upload_url.clone(),
+            download_urls: self.download_url.clone(),
+            upload_urls: self.upload_url.clone(),
             download_size_bytes: self.download_size_bytes,
             upload_size_bytes: self.upload_size_bytes,
             bandwidth_runs: self.bandwidth_runs,
@@ -79,6 +83,12 @@ impl SharedProbeArgs {
 pub struct RunArgs {
     #[command(flatten)]
     pub probe: SharedProbeArgs,
+    #[arg(long)]
+    pub json: bool,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct ProvidersArgs {
     #[arg(long)]
     pub json: bool,
 }
