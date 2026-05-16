@@ -4,16 +4,17 @@ version = "0.6.0"
 description = "Pantheon Probe is a versatile network diagnostics tool designed for measuring latency, packet loss, jitter, and bandwidth."
 authors = ["Joseph David <techiejossy@gmail.com>"]
 edition = "2021"
+rust-version = "1.88"
 repository = "https://github.com/0xTxbi/pantheon-probe"
 license = "MIT"
 
 
 [dependencies]
-anyhow = "1.0.93"
-clap = { version = "4.5.21", features = ["derive"] }
-crossterm = "0.28.1"
-ratatui = "0.26.3"
-reqwest = { version = "0.11.22" }
-serde = { version = "1.0.215", features = ["derive"] }
-serde_json = "1.0.133"
-tokio = { version = "1.33.0", features = ["full"] }
+anyhow = "1.0.102"
+clap = { version = "4.6.1", features = ["derive"] }
+crossterm = "0.29.0"
+ratatui = "0.30.0"
+reqwest = { version = "0.13.3" }
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.149"
+tokio = { version = "1.52.3", features = ["full"] }
