@@ -1045,7 +1045,7 @@ mod tests {
         calculate_jitter_ms, calculate_stats, format_provider_catalog, parse_ping_output,
         provider_catalog, resolve_probe_options, select_bandwidth_endpoint, split_size,
         BandwidthConfig, BandwidthEndpoint, BandwidthProviderPreset, MeasurementProfile,
-        ProbeOverrides, CLOUDFLARE_UPLOAD_URL,
+        ProbeOverrides, ProbeReport, CLOUDFLARE_UPLOAD_URL,
     };
     use reqwest::Client;
 
@@ -1235,6 +1235,66 @@ Reply from 1.1.1.1: bytes=32 time=2ms TTL=59
 
         assert!(message.contains("endpoint custom-3"));
         assert!(message.contains("available endpoints: custom-1, custom-2"));
+    }
+
+    #[test]
+    fn saved_runs_without_endpoint_metadata_use_defaults() {
+        let report: ProbeReport = serde_json::from_str(
+            r#"{
+                "target": "1.1.1.1",
+                "samples": 5,
+                "created_at_unix_ms": 1777210123095,
+                "ping": { "value": null, "error": "skipped" },
+                "dns": { "value": null, "error": "skipped" },
+                "bandwidth": {
+                    "value": {
+                        "download_mbps": 42.0,
+                        "upload_mbps": 10.0,
+                        "download": {
+                            "min": 42.0,
+                            "mean": 42.0,
+                            "median": 42.0,
+                            "p95": 42.0,
+                            "max": 42.0,
+                            "stddev": 0.0
+                        },
+                        "upload": {
+                            "min": 10.0,
+                            "mean": 10.0,
+                            "median": 10.0,
+                            "p95": 10.0,
+                            "max": 10.0,
+                            "stddev": 0.0
+                        },
+                        "download_runs": [],
+                        "upload_runs": [],
+                        "download_bytes": 4000000,
+                        "upload_bytes": 1000000,
+                        "runs": 1,
+                        "download_streams": 1,
+                        "upload_streams": 1,
+                        "download_url": "https://speed.cloudflare.com/__down?bytes=4000000",
+                        "upload_url": "https://speed.cloudflare.com/__up"
+                    },
+                    "error": null
+                }
+            }"#,
+        )
+        .expect("old saved run should deserialize");
+
+        let bandwidth = report
+            .bandwidth
+            .value
+            .expect("bandwidth result should exist");
+
+        assert_eq!(report.profile, MeasurementProfile::Standard);
+        assert_eq!(report.bandwidth_provider, "cloudflare");
+        assert_eq!(bandwidth.provider, "cloudflare");
+        assert_eq!(bandwidth.endpoint, "global");
+        assert_eq!(bandwidth.endpoint_latency_ms, None);
+        assert!(bandwidth.endpoint_candidates.is_empty());
+        assert_eq!(bandwidth.download_size_bytes, 4_000_000);
+        assert_eq!(bandwidth.upload_size_bytes, 1_000_000);
     }
 
     #[test]
