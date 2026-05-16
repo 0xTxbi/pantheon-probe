@@ -127,7 +127,7 @@ fn draw(terminal: &mut Terminal<CrosstermBackend<Stdout>>, state: &TuiState) -> 
                 Constraint::Min(10),
                 Constraint::Length(3),
             ])
-            .split(frame.size());
+            .split(frame.area());
 
         let header = Paragraph::new(vec![
             Line::from(Span::styled(
