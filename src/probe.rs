@@ -781,10 +781,12 @@ async fn select_bandwidth_endpoint(
 
     if candidates.is_empty() {
         let requested = requested_endpoint.unwrap_or("auto");
+        let available = format_endpoint_names(&config.endpoints);
         anyhow::bail!(
-            "no bandwidth endpoints are available for provider {} and endpoint {}",
+            "no bandwidth endpoints are available for provider {} and endpoint {}; available endpoints: {}",
             config.provider,
-            requested
+            requested,
+            available
         );
     }
 
@@ -800,17 +802,7 @@ async fn select_bandwidth_endpoint(
         .map(|(candidate, latency)| (candidate.name.clone(), latency));
 
     let (endpoint_name, latency_ms) = selected.ok_or_else(|| {
-        let errors = health
-            .iter()
-            .filter_map(|candidate| {
-                candidate
-                    .error
-                    .as_ref()
-                    .map(|error| format!("{}: {}", candidate.name, error))
-            })
-            .collect::<Vec<_>>()
-            .join("; ");
-
+        let errors = format_health_errors(&health);
         anyhow!("all bandwidth endpoint health checks failed: {errors}")
     })?;
 
@@ -824,6 +816,37 @@ async fn select_bandwidth_endpoint(
         latency_ms: Some(latency_ms),
         candidates: health,
     })
+}
+
+fn format_endpoint_names(endpoints: &[BandwidthEndpoint]) -> String {
+    if endpoints.is_empty() {
+        return "none".to_string();
+    }
+
+    endpoints
+        .iter()
+        .map(|endpoint| endpoint.name.as_str())
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+fn format_health_errors(health: &[EndpointHealth]) -> String {
+    let errors = health
+        .iter()
+        .filter_map(|candidate| {
+            candidate
+                .error
+                .as_ref()
+                .map(|error| format!("{}: {}", candidate.name, error))
+        })
+        .collect::<Vec<_>>()
+        .join("; ");
+
+    if errors.is_empty() {
+        "no endpoint health results were collected".to_string()
+    } else {
+        errors
+    }
 }
 
 async fn check_endpoint_health(client: &Client, endpoint: &BandwidthEndpoint) -> EndpointHealth {
@@ -1020,9 +1043,11 @@ fn split_size(total_size: usize, streams: u32) -> usize {
 mod tests {
     use super::{
         calculate_jitter_ms, calculate_stats, format_provider_catalog, parse_ping_output,
-        provider_catalog, resolve_probe_options, split_size, BandwidthProviderPreset,
-        MeasurementProfile, ProbeOverrides, CLOUDFLARE_UPLOAD_URL,
+        provider_catalog, resolve_probe_options, select_bandwidth_endpoint, split_size,
+        BandwidthConfig, BandwidthEndpoint, BandwidthProviderPreset, MeasurementProfile,
+        ProbeOverrides, CLOUDFLARE_UPLOAD_URL,
     };
+    use reqwest::Client;
 
     #[test]
     fn parses_unix_ping_output_into_structured_stats() {
@@ -1175,6 +1200,41 @@ Reply from 1.1.1.1: bytes=32 time=2ms TTL=59
         assert_eq!(options.bandwidth.endpoint.as_deref(), Some("custom-2"));
         assert_eq!(options.bandwidth.endpoints.len(), 2);
         assert_eq!(options.bandwidth.endpoints[1].name, "custom-2");
+    }
+
+    #[tokio::test]
+    async fn requested_endpoint_error_lists_available_candidates() {
+        let client = Client::new();
+        let config = BandwidthConfig {
+            provider: BandwidthProviderPreset::Custom,
+            endpoint: Some("custom-3".to_string()),
+            endpoints: vec![
+                BandwidthEndpoint {
+                    name: "custom-1".to_string(),
+                    download_url: "https://downloads.example.test/a.bin".to_string(),
+                    upload_url: "https://uploads.example.test/a".to_string(),
+                },
+                BandwidthEndpoint {
+                    name: "custom-2".to_string(),
+                    download_url: "https://downloads.example.test/b.bin".to_string(),
+                    upload_url: "https://uploads.example.test/b".to_string(),
+                },
+            ],
+            download_size_bytes: 1,
+            upload_size_bytes: 1,
+            runs: 1,
+            download_streams: 1,
+            upload_streams: 1,
+        };
+
+        let error = match select_bandwidth_endpoint(&client, &config).await {
+            Ok(_) => panic!("unknown endpoint should fail before probing"),
+            Err(error) => error,
+        };
+        let message = error.to_string();
+
+        assert!(message.contains("endpoint custom-3"));
+        assert!(message.contains("available endpoints: custom-1, custom-2"));
     }
 
     #[test]
