@@ -9,6 +9,8 @@ history for comparing results over time.
 
 ## Installation
 
+PantheonProbe requires Rust 1.88 or newer when building from source.
+
 ```sh
 cargo install pantheon-probe
 ```
