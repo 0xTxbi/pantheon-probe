@@ -29,6 +29,7 @@ pub struct BandwidthConfig {
     pub runs: u32,
     pub warmup_runs: u32,
     pub transfer_attempts: u32,
+    pub transfer_timeout_seconds: u64,
     pub download_streams: u32,
     pub upload_streams: u32,
     pub target_transfer_duration_ms: u64,
@@ -50,6 +51,7 @@ pub struct ProbeOverrides {
     pub bandwidth_runs: Option<u32>,
     pub bandwidth_warmup_runs: Option<u32>,
     pub transfer_attempts: Option<u32>,
+    pub transfer_timeout_seconds: Option<u64>,
     pub download_streams: Option<u32>,
     pub upload_streams: Option<u32>,
     pub target_transfer_duration_ms: Option<u64>,
@@ -94,6 +96,7 @@ struct ProfileDefaults {
     bandwidth_runs: u32,
     bandwidth_warmup_runs: u32,
     transfer_attempts: u32,
+    transfer_timeout_seconds: u64,
     download_streams: u32,
     upload_streams: u32,
     target_transfer_duration_ms: u64,
@@ -111,6 +114,7 @@ impl MeasurementProfile {
                 bandwidth_runs: 1,
                 bandwidth_warmup_runs: 1,
                 transfer_attempts: 2,
+                transfer_timeout_seconds: 15,
                 download_streams: 1,
                 upload_streams: 1,
                 target_transfer_duration_ms: 1_000,
@@ -124,6 +128,7 @@ impl MeasurementProfile {
                 bandwidth_runs: 3,
                 bandwidth_warmup_runs: 1,
                 transfer_attempts: 2,
+                transfer_timeout_seconds: 30,
                 download_streams: 2,
                 upload_streams: 2,
                 target_transfer_duration_ms: 2_500,
@@ -137,6 +142,7 @@ impl MeasurementProfile {
                 bandwidth_runs: 5,
                 bandwidth_warmup_runs: 2,
                 transfer_attempts: 3,
+                transfer_timeout_seconds: 45,
                 download_streams: 4,
                 upload_streams: 4,
                 target_transfer_duration_ms: 4_000,
@@ -237,6 +243,10 @@ pub fn resolve_probe_options(overrides: ProbeOverrides) -> Result<ProbeOptions> 
         .transfer_attempts
         .unwrap_or(defaults.transfer_attempts)
         .max(1);
+    let transfer_timeout_seconds = overrides
+        .transfer_timeout_seconds
+        .unwrap_or(defaults.transfer_timeout_seconds)
+        .max(1);
     let download_streams = overrides
         .download_streams
         .unwrap_or(defaults.download_streams)
@@ -296,6 +306,7 @@ pub fn resolve_probe_options(overrides: ProbeOverrides) -> Result<ProbeOptions> 
             runs,
             warmup_runs,
             transfer_attempts,
+            transfer_timeout_seconds,
             download_streams,
             upload_streams,
             target_transfer_duration_ms,
@@ -365,6 +376,10 @@ fn default_target_transfer_duration_ms() -> u64 {
 
 fn default_transfer_attempts() -> u32 {
     1
+}
+
+fn default_transfer_timeout_seconds() -> u64 {
+    30
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -463,6 +478,8 @@ pub struct BandwidthSummary {
     pub warmup_runs: u32,
     #[serde(default = "default_transfer_attempts")]
     pub transfer_attempts: u32,
+    #[serde(default = "default_transfer_timeout_seconds")]
+    pub transfer_timeout_seconds: u64,
     pub download_streams: u32,
     pub upload_streams: u32,
     pub download_url: String,
@@ -583,10 +600,11 @@ pub fn format_report(report: &ProbeReport) -> String {
                 bandwidth.upload.median, bandwidth.upload.p95, bandwidth.upload.stddev
             ),
             format!(
-                "  runs/streams: {} warmup, {} measured, {} attempts, {} down streams, {} up streams",
+                "  runs/streams: {} warmup, {} measured, {} attempts, {}s timeout, {} down streams, {} up streams",
                 bandwidth.warmup_runs,
                 bandwidth.runs,
                 bandwidth.transfer_attempts,
+                bandwidth.transfer_timeout_seconds,
                 bandwidth.download_streams,
                 bandwidth.upload_streams
             ),
@@ -785,7 +803,8 @@ fn measure_dns(target: &str) -> Result<DnsSummary> {
 
 async fn measure_bandwidth(config: &BandwidthConfig) -> Result<BandwidthSummary> {
     let client = Client::builder()
-        .timeout(Duration::from_secs(30))
+        .timeout(Duration::from_secs(config.transfer_timeout_seconds))
+        .user_agent(concat!("pantheon-probe/", env!("CARGO_PKG_VERSION")))
         .build()
         .context("failed to build HTTP client for bandwidth probe")?;
 
@@ -910,6 +929,7 @@ async fn measure_bandwidth(config: &BandwidthConfig) -> Result<BandwidthSummary>
         runs,
         warmup_runs: config.warmup_runs,
         transfer_attempts: config.transfer_attempts,
+        transfer_timeout_seconds: config.transfer_timeout_seconds,
         download_streams,
         upload_streams,
         download_url: sized_download_url(
@@ -1437,6 +1457,7 @@ Reply from 1.1.1.1: bytes=32 time=2ms TTL=59
             bandwidth_runs: None,
             bandwidth_warmup_runs: None,
             transfer_attempts: None,
+            transfer_timeout_seconds: None,
             download_streams: None,
             upload_streams: None,
             target_transfer_duration_ms: None,
@@ -1449,6 +1470,7 @@ Reply from 1.1.1.1: bytes=32 time=2ms TTL=59
         assert_eq!(options.samples, 5);
         assert_eq!(options.bandwidth.warmup_runs, 1);
         assert_eq!(options.bandwidth.transfer_attempts, 2);
+        assert_eq!(options.bandwidth.transfer_timeout_seconds, 30);
         assert_eq!(options.bandwidth.target_transfer_duration_ms, 2_500);
         assert_eq!(options.bandwidth.max_download_size_bytes, 32_000_000);
         assert_eq!(options.bandwidth.max_upload_size_bytes, 8_000_000);
@@ -1481,6 +1503,7 @@ Reply from 1.1.1.1: bytes=32 time=2ms TTL=59
             bandwidth_runs: Some(2),
             bandwidth_warmup_runs: Some(0),
             transfer_attempts: Some(4),
+            transfer_timeout_seconds: Some(60),
             download_streams: Some(3),
             upload_streams: Some(2),
             target_transfer_duration_ms: Some(1_500),
@@ -1521,6 +1544,7 @@ Reply from 1.1.1.1: bytes=32 time=2ms TTL=59
             bandwidth_runs: None,
             bandwidth_warmup_runs: None,
             transfer_attempts: None,
+            transfer_timeout_seconds: None,
             download_streams: None,
             upload_streams: None,
             target_transfer_duration_ms: None,
@@ -1557,6 +1581,7 @@ Reply from 1.1.1.1: bytes=32 time=2ms TTL=59
             runs: 1,
             warmup_runs: 0,
             transfer_attempts: 1,
+            transfer_timeout_seconds: 30,
             download_streams: 1,
             upload_streams: 1,
             target_transfer_duration_ms: 1_000,
@@ -1640,6 +1665,7 @@ Reply from 1.1.1.1: bytes=32 time=2ms TTL=59
         assert_eq!(bandwidth.bandwidth_elapsed_ms, 0.0);
         assert_eq!(bandwidth.warmup_runs, 0);
         assert_eq!(bandwidth.transfer_attempts, 1);
+        assert_eq!(bandwidth.transfer_timeout_seconds, 30);
     }
 
     #[test]
@@ -1666,6 +1692,7 @@ Reply from 1.1.1.1: bytes=32 time=2ms TTL=59
             bandwidth_runs: None,
             bandwidth_warmup_runs: None,
             transfer_attempts: None,
+            transfer_timeout_seconds: None,
             download_streams: None,
             upload_streams: None,
             target_transfer_duration_ms: None,
