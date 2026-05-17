@@ -29,6 +29,18 @@ Run a fuller bandwidth test profile:
 pantheon-probe run -t 1.1.1.1 --profile full
 ```
 
+Tune calibrated throughput measurements:
+
+```sh
+pantheon-probe run -t 1.1.1.1 \
+  --bandwidth-warmup-runs 2 \
+  --target-transfer-duration-ms 3000 \
+  --max-download-size-bytes 64000000 \
+  --max-upload-size-bytes 16000000 \
+  --transfer-attempts 3 \
+  --transfer-timeout-seconds 45
+```
+
 Watch repeated measurements:
 
 ```sh
@@ -119,6 +131,9 @@ PANTHEON_PROBE_HOME=/path/to/data pantheon-probe history
 
 - Ping measurements currently shell out to the system `ping` command.
 - Throughput checks support `quick`, `standard`, and `full` profiles.
+- Throughput measurements run warmup samples, calibrate payload size toward a
+  target transfer duration, then report only the measured samples in headline
+  download and upload stats.
 - The built-in bandwidth provider defaults to Cloudflare speed test URLs, and
   custom endpoints can override it.
 - When multiple endpoint candidates are available, PantheonProbe checks
