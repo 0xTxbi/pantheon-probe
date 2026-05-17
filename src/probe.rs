@@ -27,8 +27,14 @@ pub struct BandwidthConfig {
     pub download_size_bytes: usize,
     pub upload_size_bytes: usize,
     pub runs: u32,
+    pub warmup_runs: u32,
+    pub transfer_attempts: u32,
+    pub transfer_timeout_seconds: u64,
     pub download_streams: u32,
     pub upload_streams: u32,
+    pub target_transfer_duration_ms: u64,
+    pub max_download_size_bytes: usize,
+    pub max_upload_size_bytes: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -43,8 +49,14 @@ pub struct ProbeOverrides {
     pub download_size_bytes: Option<usize>,
     pub upload_size_bytes: Option<usize>,
     pub bandwidth_runs: Option<u32>,
+    pub bandwidth_warmup_runs: Option<u32>,
+    pub transfer_attempts: Option<u32>,
+    pub transfer_timeout_seconds: Option<u64>,
     pub download_streams: Option<u32>,
     pub upload_streams: Option<u32>,
+    pub target_transfer_duration_ms: Option<u64>,
+    pub max_download_size_bytes: Option<usize>,
+    pub max_upload_size_bytes: Option<usize>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -82,8 +94,14 @@ struct ProfileDefaults {
     download_size_bytes: usize,
     upload_size_bytes: usize,
     bandwidth_runs: u32,
+    bandwidth_warmup_runs: u32,
+    transfer_attempts: u32,
+    transfer_timeout_seconds: u64,
     download_streams: u32,
     upload_streams: u32,
+    target_transfer_duration_ms: u64,
+    max_download_size_bytes: usize,
+    max_upload_size_bytes: usize,
 }
 
 impl MeasurementProfile {
@@ -94,24 +112,42 @@ impl MeasurementProfile {
                 download_size_bytes: 2_000_000,
                 upload_size_bytes: 500_000,
                 bandwidth_runs: 1,
+                bandwidth_warmup_runs: 1,
+                transfer_attempts: 2,
+                transfer_timeout_seconds: 15,
                 download_streams: 1,
                 upload_streams: 1,
+                target_transfer_duration_ms: 1_000,
+                max_download_size_bytes: 8_000_000,
+                max_upload_size_bytes: 2_000_000,
             },
             Self::Standard => ProfileDefaults {
                 samples: 5,
                 download_size_bytes: 4_000_000,
                 upload_size_bytes: 1_000_000,
                 bandwidth_runs: 3,
+                bandwidth_warmup_runs: 1,
+                transfer_attempts: 2,
+                transfer_timeout_seconds: 30,
                 download_streams: 2,
                 upload_streams: 2,
+                target_transfer_duration_ms: 2_500,
+                max_download_size_bytes: 32_000_000,
+                max_upload_size_bytes: 8_000_000,
             },
             Self::Full => ProfileDefaults {
                 samples: 7,
                 download_size_bytes: 12_000_000,
                 upload_size_bytes: 4_000_000,
                 bandwidth_runs: 5,
+                bandwidth_warmup_runs: 2,
+                transfer_attempts: 3,
+                transfer_timeout_seconds: 45,
                 download_streams: 4,
                 upload_streams: 4,
+                target_transfer_duration_ms: 4_000,
+                max_download_size_bytes: 128_000_000,
+                max_upload_size_bytes: 32_000_000,
             },
         }
     }
@@ -200,6 +236,17 @@ pub fn resolve_probe_options(overrides: ProbeOverrides) -> Result<ProbeOptions> 
         .bandwidth_runs
         .unwrap_or(defaults.bandwidth_runs)
         .max(1);
+    let warmup_runs = overrides
+        .bandwidth_warmup_runs
+        .unwrap_or(defaults.bandwidth_warmup_runs);
+    let transfer_attempts = overrides
+        .transfer_attempts
+        .unwrap_or(defaults.transfer_attempts)
+        .max(1);
+    let transfer_timeout_seconds = overrides
+        .transfer_timeout_seconds
+        .unwrap_or(defaults.transfer_timeout_seconds)
+        .max(1);
     let download_streams = overrides
         .download_streams
         .unwrap_or(defaults.download_streams)
@@ -208,6 +255,18 @@ pub fn resolve_probe_options(overrides: ProbeOverrides) -> Result<ProbeOptions> 
         .upload_streams
         .unwrap_or(defaults.upload_streams)
         .max(1);
+    let target_transfer_duration_ms = overrides
+        .target_transfer_duration_ms
+        .unwrap_or(defaults.target_transfer_duration_ms)
+        .max(1);
+    let max_download_size_bytes = overrides
+        .max_download_size_bytes
+        .unwrap_or(defaults.max_download_size_bytes)
+        .max(download_size_bytes);
+    let max_upload_size_bytes = overrides
+        .max_upload_size_bytes
+        .unwrap_or(defaults.max_upload_size_bytes)
+        .max(upload_size_bytes);
 
     let has_download_overrides = !overrides.download_urls.is_empty();
     let has_upload_overrides = !overrides.upload_urls.is_empty();
@@ -245,8 +304,14 @@ pub fn resolve_probe_options(overrides: ProbeOverrides) -> Result<ProbeOptions> 
             download_size_bytes,
             upload_size_bytes,
             runs,
+            warmup_runs,
+            transfer_attempts,
+            transfer_timeout_seconds,
             download_streams,
             upload_streams,
+            target_transfer_duration_ms,
+            max_download_size_bytes,
+            max_upload_size_bytes,
         },
     })
 }
@@ -301,6 +366,20 @@ fn default_download_size_bytes() -> usize {
 
 fn default_upload_size_bytes() -> usize {
     MeasurementProfile::Standard.defaults().upload_size_bytes
+}
+
+fn default_target_transfer_duration_ms() -> u64 {
+    MeasurementProfile::Standard
+        .defaults()
+        .target_transfer_duration_ms
+}
+
+fn default_transfer_attempts() -> u32 {
+    1
+}
+
+fn default_transfer_timeout_seconds() -> u64 {
+    30
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -376,13 +455,31 @@ pub struct BandwidthSummary {
     pub upload: MetricStats,
     pub download_runs: Vec<TransferSample>,
     pub upload_runs: Vec<TransferSample>,
+    #[serde(default)]
+    pub warmup_download_runs: Vec<TransferSample>,
+    #[serde(default)]
+    pub warmup_upload_runs: Vec<TransferSample>,
     pub download_bytes: u64,
     pub upload_bytes: u64,
     #[serde(default = "default_download_size_bytes")]
     pub download_size_bytes: usize,
     #[serde(default = "default_upload_size_bytes")]
     pub upload_size_bytes: usize,
+    #[serde(default = "default_download_size_bytes")]
+    pub calibrated_download_size_bytes: usize,
+    #[serde(default = "default_upload_size_bytes")]
+    pub calibrated_upload_size_bytes: usize,
+    #[serde(default = "default_target_transfer_duration_ms")]
+    pub target_transfer_duration_ms: u64,
+    #[serde(default)]
+    pub bandwidth_elapsed_ms: f64,
     pub runs: u32,
+    #[serde(default)]
+    pub warmup_runs: u32,
+    #[serde(default = "default_transfer_attempts")]
+    pub transfer_attempts: u32,
+    #[serde(default = "default_transfer_timeout_seconds")]
+    pub transfer_timeout_seconds: u64,
     pub download_streams: u32,
     pub upload_streams: u32,
     pub download_url: String,
@@ -410,6 +507,8 @@ pub struct MetricStats {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TransferSample {
+    #[serde(default)]
+    pub target_bytes: usize,
     pub mbps: f64,
     pub bytes: u64,
     pub elapsed_ms: f64,
@@ -493,20 +592,35 @@ pub fn format_report(report: &ProbeReport) -> String {
     output.push_str(&format_outcome(&report.bandwidth, |bandwidth| {
         [
             format!(
-                "  download: {:.2} Mbps median, {:.2} Mbps p95",
-                bandwidth.download.median, bandwidth.download.p95
+                "  download: {:.2} Mbps median, {:.2} Mbps p95, {:.2} Mbps stddev",
+                bandwidth.download.median, bandwidth.download.p95, bandwidth.download.stddev
             ),
             format!(
-                "  upload: {:.2} Mbps median, {:.2} Mbps p95",
-                bandwidth.upload.median, bandwidth.upload.p95
+                "  upload: {:.2} Mbps median, {:.2} Mbps p95, {:.2} Mbps stddev",
+                bandwidth.upload.median, bandwidth.upload.p95, bandwidth.upload.stddev
             ),
             format!(
-                "  runs/streams: {} runs, {} down streams, {} up streams",
-                bandwidth.runs, bandwidth.download_streams, bandwidth.upload_streams
+                "  runs/streams: {} warmup, {} measured, {} attempts, {}s timeout, {} down streams, {} up streams",
+                bandwidth.warmup_runs,
+                bandwidth.runs,
+                bandwidth.transfer_attempts,
+                bandwidth.transfer_timeout_seconds,
+                bandwidth.download_streams,
+                bandwidth.upload_streams
             ),
             format!(
-                "  payload sizing: {} down bytes, {} up bytes",
+                "  configured sizing: {} down bytes, {} up bytes",
                 bandwidth.download_size_bytes, bandwidth.upload_size_bytes
+            ),
+            format!(
+                "  calibrated sizing: {} down bytes, {} up bytes, target {} ms",
+                bandwidth.calibrated_download_size_bytes,
+                bandwidth.calibrated_upload_size_bytes,
+                bandwidth.target_transfer_duration_ms
+            ),
+            format!(
+                "  bandwidth elapsed: {}",
+                format_optional_value(Some(bandwidth.bandwidth_elapsed_ms), "ms")
             ),
             format!(
                 "  provider/endpoint: {}/{}",
@@ -689,34 +803,90 @@ fn measure_dns(target: &str) -> Result<DnsSummary> {
 
 async fn measure_bandwidth(config: &BandwidthConfig) -> Result<BandwidthSummary> {
     let client = Client::builder()
-        .timeout(Duration::from_secs(30))
+        .timeout(Duration::from_secs(config.transfer_timeout_seconds))
+        .user_agent(concat!("pantheon-probe/", env!("CARGO_PKG_VERSION")))
         .build()
         .context("failed to build HTTP client for bandwidth probe")?;
 
     let selected = select_bandwidth_endpoint(&client, config).await?;
+    let bandwidth_started = Instant::now();
     let runs = config.runs.max(1);
     let download_streams = config.download_streams.max(1);
     let upload_streams = config.upload_streams.max(1);
     let mut download_runs = Vec::with_capacity(runs as usize);
     let mut upload_runs = Vec::with_capacity(runs as usize);
+    let mut warmup_download_runs = Vec::with_capacity(config.warmup_runs as usize);
+    let mut warmup_upload_runs = Vec::with_capacity(config.warmup_runs as usize);
 
-    for _ in 0..runs {
-        download_runs.push(
-            download_sample(&client, &selected.endpoint.download_url, download_streams)
-                .await
-                .with_context(|| {
-                    format!(
-                        "download throughput check failed for {}",
-                        selected.endpoint.download_url
-                    )
-                })?,
+    for _ in 0..config.warmup_runs {
+        warmup_download_runs.push(
+            download_sample_with_retries(
+                &client,
+                &selected.endpoint.download_url,
+                config.download_size_bytes,
+                download_streams,
+                config.transfer_attempts,
+            )
+            .await
+            .with_context(|| {
+                format!(
+                    "download warmup failed for {}",
+                    selected.endpoint.download_url
+                )
+            })?,
         );
-        upload_runs.push(
-            upload_sample(
+        warmup_upload_runs.push(
+            upload_sample_with_retries(
                 &client,
                 &selected.endpoint.upload_url,
                 config.upload_size_bytes,
                 upload_streams,
+                config.transfer_attempts,
+            )
+            .await
+            .with_context(|| {
+                format!("upload warmup failed for {}", selected.endpoint.upload_url)
+            })?,
+        );
+    }
+
+    let calibrated_download_size_bytes = calibrate_transfer_size(
+        &warmup_download_runs,
+        config.download_size_bytes,
+        config.max_download_size_bytes,
+        config.target_transfer_duration_ms,
+    );
+    let calibrated_upload_size_bytes = calibrate_transfer_size(
+        &warmup_upload_runs,
+        config.upload_size_bytes,
+        config.max_upload_size_bytes,
+        config.target_transfer_duration_ms,
+    );
+
+    for _ in 0..runs {
+        download_runs.push(
+            download_sample_with_retries(
+                &client,
+                &selected.endpoint.download_url,
+                calibrated_download_size_bytes,
+                download_streams,
+                config.transfer_attempts,
+            )
+            .await
+            .with_context(|| {
+                format!(
+                    "download throughput check failed for {}",
+                    selected.endpoint.download_url
+                )
+            })?,
+        );
+        upload_runs.push(
+            upload_sample_with_retries(
+                &client,
+                &selected.endpoint.upload_url,
+                calibrated_upload_size_bytes,
+                upload_streams,
+                config.transfer_attempts,
             )
             .await
             .with_context(|| {
@@ -750,10 +920,22 @@ async fn measure_bandwidth(config: &BandwidthConfig) -> Result<BandwidthSummary>
         upload_bytes,
         download_size_bytes: config.download_size_bytes,
         upload_size_bytes: config.upload_size_bytes,
+        calibrated_download_size_bytes,
+        calibrated_upload_size_bytes,
+        target_transfer_duration_ms: config.target_transfer_duration_ms,
+        bandwidth_elapsed_ms: duration_to_ms(bandwidth_started.elapsed()),
+        warmup_download_runs,
+        warmup_upload_runs,
         runs,
+        warmup_runs: config.warmup_runs,
+        transfer_attempts: config.transfer_attempts,
+        transfer_timeout_seconds: config.transfer_timeout_seconds,
         download_streams,
         upload_streams,
-        download_url: selected.endpoint.download_url,
+        download_url: sized_download_url(
+            &selected.endpoint.download_url,
+            calibrated_download_size_bytes,
+        ),
         upload_url: selected.endpoint.upload_url,
     })
 }
@@ -849,6 +1031,53 @@ fn format_health_errors(health: &[EndpointHealth]) -> String {
     }
 }
 
+fn calibrate_transfer_size(
+    warmup_runs: &[TransferSample],
+    minimum_bytes: usize,
+    maximum_bytes: usize,
+    target_duration_ms: u64,
+) -> usize {
+    let minimum_bytes = minimum_bytes.max(1);
+    let maximum_bytes = maximum_bytes.max(minimum_bytes);
+    let median_mbps = median_sample_mbps(warmup_runs);
+    let target_bytes = median_mbps
+        .map(|mbps| {
+            let target_seconds = target_duration_ms.max(1) as f64 / 1_000.0;
+            ((mbps * 1_000_000.0 / 8.0) * target_seconds).round() as usize
+        })
+        .unwrap_or(minimum_bytes);
+
+    target_bytes.clamp(minimum_bytes, maximum_bytes)
+}
+
+fn median_sample_mbps(samples: &[TransferSample]) -> Option<f64> {
+    let values = samples
+        .iter()
+        .filter(|sample| sample.mbps.is_finite() && sample.mbps > 0.0)
+        .map(|sample| sample.mbps)
+        .collect::<Vec<_>>();
+
+    calculate_stats(&values).map(|stats| stats.median)
+}
+
+fn sized_download_url(download_url: &str, target_bytes: usize) -> String {
+    let Some(bytes_position) = download_url.find("bytes=") else {
+        return download_url.to_string();
+    };
+    let value_start = bytes_position + "bytes=".len();
+    let value_end = download_url[value_start..]
+        .find('&')
+        .map(|offset| value_start + offset)
+        .unwrap_or(download_url.len());
+
+    format!(
+        "{}{}{}",
+        &download_url[..value_start],
+        target_bytes,
+        &download_url[value_end..]
+    )
+}
+
 async fn check_endpoint_health(client: &Client, endpoint: &BandwidthEndpoint) -> EndpointHealth {
     let started = Instant::now();
     let result = client
@@ -884,13 +1113,69 @@ async fn check_endpoint_health(client: &Client, endpoint: &BandwidthEndpoint) ->
     }
 }
 
-async fn download_sample(client: &Client, url: &str, streams: u32) -> Result<TransferSample> {
+async fn download_sample_with_retries(
+    client: &Client,
+    url: &str,
+    target_bytes: usize,
+    streams: u32,
+    attempts: u32,
+) -> Result<TransferSample> {
+    let mut last_error = None;
+    for attempt in 1..=attempts.max(1) {
+        match download_sample(client, url, target_bytes, streams).await {
+            Ok(sample) => return Ok(sample),
+            Err(error) => {
+                last_error = Some(error);
+                if attempt < attempts {
+                    tokio::time::sleep(retry_delay(attempt)).await;
+                }
+            }
+        }
+    }
+
+    Err(last_error.expect("at least one transfer attempt runs"))
+}
+
+async fn upload_sample_with_retries(
+    client: &Client,
+    upload_url: &str,
+    upload_size_bytes: usize,
+    streams: u32,
+    attempts: u32,
+) -> Result<TransferSample> {
+    let mut last_error = None;
+    for attempt in 1..=attempts.max(1) {
+        match upload_sample(client, upload_url, upload_size_bytes, streams).await {
+            Ok(sample) => return Ok(sample),
+            Err(error) => {
+                last_error = Some(error);
+                if attempt < attempts {
+                    tokio::time::sleep(retry_delay(attempt)).await;
+                }
+            }
+        }
+    }
+
+    Err(last_error.expect("at least one transfer attempt runs"))
+}
+
+fn retry_delay(attempt: u32) -> Duration {
+    Duration::from_millis(150 * u64::from(attempt))
+}
+
+async fn download_sample(
+    client: &Client,
+    url: &str,
+    target_bytes: usize,
+    streams: u32,
+) -> Result<TransferSample> {
     let started = Instant::now();
     let mut tasks = JoinSet::new();
+    let download_url = sized_download_url(url, target_bytes);
 
     for _ in 0..streams {
         let client = client.clone();
-        let url = url.to_string();
+        let url = download_url.clone();
         tasks.spawn(async move { download_bytes(&client, &url).await });
     }
 
@@ -902,6 +1187,7 @@ async fn download_sample(client: &Client, url: &str, streams: u32) -> Result<Tra
     let elapsed = started.elapsed();
 
     Ok(TransferSample {
+        target_bytes,
         mbps: bytes_to_mbps(total_bytes, elapsed),
         bytes: total_bytes,
         elapsed_ms: duration_to_ms(elapsed),
@@ -933,6 +1219,7 @@ async fn upload_sample(
     let elapsed = started.elapsed();
 
     Ok(TransferSample {
+        target_bytes: upload_size_bytes,
         mbps: bytes_to_mbps(total_bytes, elapsed),
         bytes: total_bytes,
         elapsed_ms: duration_to_ms(elapsed),
@@ -1042,10 +1329,11 @@ fn split_size(total_size: usize, streams: u32) -> usize {
 #[cfg(test)]
 mod tests {
     use super::{
-        calculate_jitter_ms, calculate_stats, format_provider_catalog, parse_ping_output,
-        provider_catalog, resolve_probe_options, select_bandwidth_endpoint, split_size,
-        BandwidthConfig, BandwidthEndpoint, BandwidthProviderPreset, MeasurementProfile,
-        ProbeOverrides, ProbeReport, CLOUDFLARE_UPLOAD_URL,
+        calculate_jitter_ms, calculate_stats, calibrate_transfer_size, format_provider_catalog,
+        parse_ping_output, provider_catalog, resolve_probe_options, select_bandwidth_endpoint,
+        sized_download_url, split_size, BandwidthConfig, BandwidthEndpoint,
+        BandwidthProviderPreset, MeasurementProfile, ProbeOverrides, ProbeReport, TransferSample,
+        CLOUDFLARE_UPLOAD_URL,
     };
     use reqwest::Client;
 
@@ -1111,6 +1399,50 @@ Reply from 1.1.1.1: bytes=32 time=2ms TTL=59
     }
 
     #[test]
+    fn calibrates_transfer_size_from_warmup_median() {
+        let warmup = vec![
+            TransferSample {
+                target_bytes: 1_000,
+                mbps: 80.0,
+                bytes: 10_000_000,
+                elapsed_ms: 1_000.0,
+                streams: 1,
+            },
+            TransferSample {
+                target_bytes: 1_000,
+                mbps: 120.0,
+                bytes: 15_000_000,
+                elapsed_ms: 1_000.0,
+                streams: 1,
+            },
+        ];
+
+        assert_eq!(
+            calibrate_transfer_size(&warmup, 1_000_000, 20_000_000, 2_000),
+            20_000_000
+        );
+        assert_eq!(
+            calibrate_transfer_size(&[], 1_000_000, 20_000_000, 2_000),
+            1_000_000
+        );
+    }
+
+    #[test]
+    fn rewrites_cloudflare_download_size_without_touching_custom_urls() {
+        assert_eq!(
+            sized_download_url(
+                "https://speed.cloudflare.com/__down?bytes=4000000",
+                8_000_000
+            ),
+            "https://speed.cloudflare.com/__down?bytes=8000000"
+        );
+        assert_eq!(
+            sized_download_url("https://downloads.example.test/file.bin", 8_000_000),
+            "https://downloads.example.test/file.bin"
+        );
+    }
+
+    #[test]
     fn resolves_standard_cloudflare_defaults() {
         let options = resolve_probe_options(ProbeOverrides {
             target: "1.1.1.1".to_string(),
@@ -1123,13 +1455,25 @@ Reply from 1.1.1.1: bytes=32 time=2ms TTL=59
             download_size_bytes: None,
             upload_size_bytes: None,
             bandwidth_runs: None,
+            bandwidth_warmup_runs: None,
+            transfer_attempts: None,
+            transfer_timeout_seconds: None,
             download_streams: None,
             upload_streams: None,
+            target_transfer_duration_ms: None,
+            max_download_size_bytes: None,
+            max_upload_size_bytes: None,
         })
         .expect("probe options should resolve");
 
         assert_eq!(options.profile, MeasurementProfile::Standard);
         assert_eq!(options.samples, 5);
+        assert_eq!(options.bandwidth.warmup_runs, 1);
+        assert_eq!(options.bandwidth.transfer_attempts, 2);
+        assert_eq!(options.bandwidth.transfer_timeout_seconds, 30);
+        assert_eq!(options.bandwidth.target_transfer_duration_ms, 2_500);
+        assert_eq!(options.bandwidth.max_download_size_bytes, 32_000_000);
+        assert_eq!(options.bandwidth.max_upload_size_bytes, 8_000_000);
         assert_eq!(
             options.bandwidth.provider,
             BandwidthProviderPreset::Cloudflare
@@ -1157,8 +1501,14 @@ Reply from 1.1.1.1: bytes=32 time=2ms TTL=59
             download_size_bytes: Some(9_000_000),
             upload_size_bytes: Some(2_000_000),
             bandwidth_runs: Some(2),
+            bandwidth_warmup_runs: Some(0),
+            transfer_attempts: Some(4),
+            transfer_timeout_seconds: Some(60),
             download_streams: Some(3),
             upload_streams: Some(2),
+            target_transfer_duration_ms: Some(1_500),
+            max_download_size_bytes: Some(12_000_000),
+            max_upload_size_bytes: Some(4_000_000),
         })
         .expect("probe options should resolve");
 
@@ -1192,8 +1542,14 @@ Reply from 1.1.1.1: bytes=32 time=2ms TTL=59
             download_size_bytes: None,
             upload_size_bytes: None,
             bandwidth_runs: None,
+            bandwidth_warmup_runs: None,
+            transfer_attempts: None,
+            transfer_timeout_seconds: None,
             download_streams: None,
             upload_streams: None,
+            target_transfer_duration_ms: None,
+            max_download_size_bytes: None,
+            max_upload_size_bytes: None,
         })
         .expect("probe options should resolve");
 
@@ -1223,8 +1579,14 @@ Reply from 1.1.1.1: bytes=32 time=2ms TTL=59
             download_size_bytes: 1,
             upload_size_bytes: 1,
             runs: 1,
+            warmup_runs: 0,
+            transfer_attempts: 1,
+            transfer_timeout_seconds: 30,
             download_streams: 1,
             upload_streams: 1,
+            target_transfer_duration_ms: 1_000,
+            max_download_size_bytes: 1,
+            max_upload_size_bytes: 1,
         };
 
         let error = match select_bandwidth_endpoint(&client, &config).await {
@@ -1293,8 +1655,17 @@ Reply from 1.1.1.1: bytes=32 time=2ms TTL=59
         assert_eq!(bandwidth.endpoint, "global");
         assert_eq!(bandwidth.endpoint_latency_ms, None);
         assert!(bandwidth.endpoint_candidates.is_empty());
+        assert!(bandwidth.warmup_download_runs.is_empty());
+        assert!(bandwidth.warmup_upload_runs.is_empty());
         assert_eq!(bandwidth.download_size_bytes, 4_000_000);
         assert_eq!(bandwidth.upload_size_bytes, 1_000_000);
+        assert_eq!(bandwidth.calibrated_download_size_bytes, 4_000_000);
+        assert_eq!(bandwidth.calibrated_upload_size_bytes, 1_000_000);
+        assert_eq!(bandwidth.target_transfer_duration_ms, 2_500);
+        assert_eq!(bandwidth.bandwidth_elapsed_ms, 0.0);
+        assert_eq!(bandwidth.warmup_runs, 0);
+        assert_eq!(bandwidth.transfer_attempts, 1);
+        assert_eq!(bandwidth.transfer_timeout_seconds, 30);
     }
 
     #[test]
@@ -1319,8 +1690,14 @@ Reply from 1.1.1.1: bytes=32 time=2ms TTL=59
             download_size_bytes: None,
             upload_size_bytes: None,
             bandwidth_runs: None,
+            bandwidth_warmup_runs: None,
+            transfer_attempts: None,
+            transfer_timeout_seconds: None,
             download_streams: None,
             upload_streams: None,
+            target_transfer_duration_ms: None,
+            max_download_size_bytes: None,
+            max_upload_size_bytes: None,
         })
         .expect_err("custom provider should require both urls");
 

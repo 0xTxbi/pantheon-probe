@@ -205,7 +205,7 @@ pub fn format_history(runs: &[StoredRun]) -> String {
     runs.iter()
         .map(|run| {
             format!(
-                "{} | {} | target: {} | profile: {} | provider: {} | endpoint: {} | ping avg: {} | download: {} | upload: {}",
+                "{} | {} | target: {} | profile: {} | provider: {} | endpoint: {} | ping avg: {} | download: {} | upload: {} | measured bytes: {}/{}",
                 run.id,
                 run.report.created_at_unix_ms,
                 run.target,
@@ -241,6 +241,18 @@ pub fn format_history(runs: &[StoredRun]) -> String {
                         .map(|value| value.upload_mbps),
                     "Mbps"
                 ),
+                run.report
+                    .bandwidth
+                    .value
+                    .as_ref()
+                    .map(|value| value.calibrated_download_size_bytes.to_string())
+                    .unwrap_or_else(|| "unavailable".to_string()),
+                run.report
+                    .bandwidth
+                    .value
+                    .as_ref()
+                    .map(|value| value.calibrated_upload_size_bytes.to_string())
+                    .unwrap_or_else(|| "unavailable".to_string()),
             )
         })
         .collect::<Vec<_>>()
@@ -302,12 +314,12 @@ pub fn export_runs_json(runs: &[StoredRun]) -> Result<String> {
 
 pub fn export_runs_csv(runs: &[StoredRun]) -> String {
     let mut output = String::from(
-        "created_at_unix_ms,target,profile,bandwidth_provider,bandwidth_endpoint,ping_avg_ms,ping_median_ms,ping_p95_ms,packet_loss_pct,dns_resolution_ms,download_mbps,upload_mbps\n",
+        "created_at_unix_ms,target,profile,bandwidth_provider,bandwidth_endpoint,ping_avg_ms,ping_median_ms,ping_p95_ms,packet_loss_pct,dns_resolution_ms,download_mbps,upload_mbps,calibrated_download_size_bytes,calibrated_upload_size_bytes,bandwidth_elapsed_ms\n",
     );
 
     for run in runs {
         output.push_str(&format!(
-            "{},{},{},{},{},{},{},{},{},{},{},{}\n",
+            "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}\n",
             run.report.created_at_unix_ms,
             csv_escape(&run.target),
             run.report.profile,
@@ -368,6 +380,25 @@ pub fn export_runs_csv(runs: &[StoredRun]) -> String {
                     .value
                     .as_ref()
                     .map(|value| value.upload_mbps)
+            ),
+            run.report
+                .bandwidth
+                .value
+                .as_ref()
+                .map(|value| value.calibrated_download_size_bytes.to_string())
+                .unwrap_or_default(),
+            run.report
+                .bandwidth
+                .value
+                .as_ref()
+                .map(|value| value.calibrated_upload_size_bytes.to_string())
+                .unwrap_or_default(),
+            csv_number(
+                run.report
+                    .bandwidth
+                    .value
+                    .as_ref()
+                    .map(|value| value.bandwidth_elapsed_ms)
             ),
         ));
     }
@@ -582,22 +613,45 @@ mod tests {
                             stddev: 1.4,
                         },
                         download_runs: vec![TransferSample {
+                            target_bytes: 4_000_000,
                             mbps: 50.0,
                             bytes: 4_000_000,
                             elapsed_ms: 640.0,
                             streams: 2,
                         }],
                         upload_runs: vec![TransferSample {
+                            target_bytes: 1_000_000,
                             mbps: 20.0,
                             bytes: 1_000_000,
                             elapsed_ms: 400.0,
+                            streams: 2,
+                        }],
+                        warmup_download_runs: vec![TransferSample {
+                            target_bytes: 4_000_000,
+                            mbps: 48.0,
+                            bytes: 4_000_000,
+                            elapsed_ms: 666.0,
+                            streams: 2,
+                        }],
+                        warmup_upload_runs: vec![TransferSample {
+                            target_bytes: 1_000_000,
+                            mbps: 18.0,
+                            bytes: 1_000_000,
+                            elapsed_ms: 444.0,
                             streams: 2,
                         }],
                         download_bytes: 4_000_000,
                         upload_bytes: 1_000_000,
                         download_size_bytes: 4_000_000,
                         upload_size_bytes: 1_000_000,
+                        calibrated_download_size_bytes: 6_000_000,
+                        calibrated_upload_size_bytes: 2_000_000,
+                        target_transfer_duration_ms: 2_500,
+                        bandwidth_elapsed_ms: 3_000.0,
                         runs: 1,
+                        warmup_runs: 1,
+                        transfer_attempts: 2,
+                        transfer_timeout_seconds: 30,
                         download_streams: 2,
                         upload_streams: 2,
                         download_url: "https://speed.cloudflare.com/__down?bytes=4000000"

@@ -55,9 +55,21 @@ pub struct SharedProbeArgs {
     #[arg(long)]
     pub bandwidth_runs: Option<u32>,
     #[arg(long)]
+    pub bandwidth_warmup_runs: Option<u32>,
+    #[arg(long)]
+    pub transfer_attempts: Option<u32>,
+    #[arg(long)]
+    pub transfer_timeout_seconds: Option<u64>,
+    #[arg(long)]
     pub download_streams: Option<u32>,
     #[arg(long)]
     pub upload_streams: Option<u32>,
+    #[arg(long)]
+    pub target_transfer_duration_ms: Option<u64>,
+    #[arg(long)]
+    pub max_download_size_bytes: Option<usize>,
+    #[arg(long)]
+    pub max_upload_size_bytes: Option<usize>,
 }
 
 impl SharedProbeArgs {
@@ -73,8 +85,14 @@ impl SharedProbeArgs {
             download_size_bytes: self.download_size_bytes,
             upload_size_bytes: self.upload_size_bytes,
             bandwidth_runs: self.bandwidth_runs,
+            bandwidth_warmup_runs: self.bandwidth_warmup_runs,
+            transfer_attempts: self.transfer_attempts,
+            transfer_timeout_seconds: self.transfer_timeout_seconds,
             download_streams: self.download_streams,
             upload_streams: self.upload_streams,
+            target_transfer_duration_ms: self.target_transfer_duration_ms,
+            max_download_size_bytes: self.max_download_size_bytes,
+            max_upload_size_bytes: self.max_upload_size_bytes,
         })
     }
 }
