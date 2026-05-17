@@ -28,6 +28,7 @@ pub struct BandwidthConfig {
     pub upload_size_bytes: usize,
     pub runs: u32,
     pub warmup_runs: u32,
+    pub transfer_attempts: u32,
     pub download_streams: u32,
     pub upload_streams: u32,
     pub target_transfer_duration_ms: u64,
@@ -48,6 +49,7 @@ pub struct ProbeOverrides {
     pub upload_size_bytes: Option<usize>,
     pub bandwidth_runs: Option<u32>,
     pub bandwidth_warmup_runs: Option<u32>,
+    pub transfer_attempts: Option<u32>,
     pub download_streams: Option<u32>,
     pub upload_streams: Option<u32>,
     pub target_transfer_duration_ms: Option<u64>,
@@ -91,6 +93,7 @@ struct ProfileDefaults {
     upload_size_bytes: usize,
     bandwidth_runs: u32,
     bandwidth_warmup_runs: u32,
+    transfer_attempts: u32,
     download_streams: u32,
     upload_streams: u32,
     target_transfer_duration_ms: u64,
@@ -107,6 +110,7 @@ impl MeasurementProfile {
                 upload_size_bytes: 500_000,
                 bandwidth_runs: 1,
                 bandwidth_warmup_runs: 1,
+                transfer_attempts: 2,
                 download_streams: 1,
                 upload_streams: 1,
                 target_transfer_duration_ms: 1_000,
@@ -119,6 +123,7 @@ impl MeasurementProfile {
                 upload_size_bytes: 1_000_000,
                 bandwidth_runs: 3,
                 bandwidth_warmup_runs: 1,
+                transfer_attempts: 2,
                 download_streams: 2,
                 upload_streams: 2,
                 target_transfer_duration_ms: 2_500,
@@ -131,6 +136,7 @@ impl MeasurementProfile {
                 upload_size_bytes: 4_000_000,
                 bandwidth_runs: 5,
                 bandwidth_warmup_runs: 2,
+                transfer_attempts: 3,
                 download_streams: 4,
                 upload_streams: 4,
                 target_transfer_duration_ms: 4_000,
@@ -227,6 +233,10 @@ pub fn resolve_probe_options(overrides: ProbeOverrides) -> Result<ProbeOptions> 
     let warmup_runs = overrides
         .bandwidth_warmup_runs
         .unwrap_or(defaults.bandwidth_warmup_runs);
+    let transfer_attempts = overrides
+        .transfer_attempts
+        .unwrap_or(defaults.transfer_attempts)
+        .max(1);
     let download_streams = overrides
         .download_streams
         .unwrap_or(defaults.download_streams)
@@ -285,6 +295,7 @@ pub fn resolve_probe_options(overrides: ProbeOverrides) -> Result<ProbeOptions> 
             upload_size_bytes,
             runs,
             warmup_runs,
+            transfer_attempts,
             download_streams,
             upload_streams,
             target_transfer_duration_ms,
@@ -350,6 +361,10 @@ fn default_target_transfer_duration_ms() -> u64 {
     MeasurementProfile::Standard
         .defaults()
         .target_transfer_duration_ms
+}
+
+fn default_transfer_attempts() -> u32 {
+    1
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -446,6 +461,8 @@ pub struct BandwidthSummary {
     pub runs: u32,
     #[serde(default)]
     pub warmup_runs: u32,
+    #[serde(default = "default_transfer_attempts")]
+    pub transfer_attempts: u32,
     pub download_streams: u32,
     pub upload_streams: u32,
     pub download_url: String,
@@ -566,9 +583,10 @@ pub fn format_report(report: &ProbeReport) -> String {
                 bandwidth.upload.median, bandwidth.upload.p95, bandwidth.upload.stddev
             ),
             format!(
-                "  runs/streams: {} warmup, {} measured, {} down streams, {} up streams",
+                "  runs/streams: {} warmup, {} measured, {} attempts, {} down streams, {} up streams",
                 bandwidth.warmup_runs,
                 bandwidth.runs,
+                bandwidth.transfer_attempts,
                 bandwidth.download_streams,
                 bandwidth.upload_streams
             ),
@@ -783,11 +801,12 @@ async fn measure_bandwidth(config: &BandwidthConfig) -> Result<BandwidthSummary>
 
     for _ in 0..config.warmup_runs {
         warmup_download_runs.push(
-            download_sample(
+            download_sample_with_retries(
                 &client,
                 &selected.endpoint.download_url,
                 config.download_size_bytes,
                 download_streams,
+                config.transfer_attempts,
             )
             .await
             .with_context(|| {
@@ -798,11 +817,12 @@ async fn measure_bandwidth(config: &BandwidthConfig) -> Result<BandwidthSummary>
             })?,
         );
         warmup_upload_runs.push(
-            upload_sample(
+            upload_sample_with_retries(
                 &client,
                 &selected.endpoint.upload_url,
                 config.upload_size_bytes,
                 upload_streams,
+                config.transfer_attempts,
             )
             .await
             .with_context(|| {
@@ -826,11 +846,12 @@ async fn measure_bandwidth(config: &BandwidthConfig) -> Result<BandwidthSummary>
 
     for _ in 0..runs {
         download_runs.push(
-            download_sample(
+            download_sample_with_retries(
                 &client,
                 &selected.endpoint.download_url,
                 calibrated_download_size_bytes,
                 download_streams,
+                config.transfer_attempts,
             )
             .await
             .with_context(|| {
@@ -841,11 +862,12 @@ async fn measure_bandwidth(config: &BandwidthConfig) -> Result<BandwidthSummary>
             })?,
         );
         upload_runs.push(
-            upload_sample(
+            upload_sample_with_retries(
                 &client,
                 &selected.endpoint.upload_url,
                 calibrated_upload_size_bytes,
                 upload_streams,
+                config.transfer_attempts,
             )
             .await
             .with_context(|| {
@@ -887,6 +909,7 @@ async fn measure_bandwidth(config: &BandwidthConfig) -> Result<BandwidthSummary>
         warmup_upload_runs,
         runs,
         warmup_runs: config.warmup_runs,
+        transfer_attempts: config.transfer_attempts,
         download_streams,
         upload_streams,
         download_url: sized_download_url(
@@ -1068,6 +1091,56 @@ async fn check_endpoint_health(client: &Client, endpoint: &BandwidthEndpoint) ->
             error: Some(error.to_string()),
         },
     }
+}
+
+async fn download_sample_with_retries(
+    client: &Client,
+    url: &str,
+    target_bytes: usize,
+    streams: u32,
+    attempts: u32,
+) -> Result<TransferSample> {
+    let mut last_error = None;
+    for attempt in 1..=attempts.max(1) {
+        match download_sample(client, url, target_bytes, streams).await {
+            Ok(sample) => return Ok(sample),
+            Err(error) => {
+                last_error = Some(error);
+                if attempt < attempts {
+                    tokio::time::sleep(retry_delay(attempt)).await;
+                }
+            }
+        }
+    }
+
+    Err(last_error.expect("at least one transfer attempt runs"))
+}
+
+async fn upload_sample_with_retries(
+    client: &Client,
+    upload_url: &str,
+    upload_size_bytes: usize,
+    streams: u32,
+    attempts: u32,
+) -> Result<TransferSample> {
+    let mut last_error = None;
+    for attempt in 1..=attempts.max(1) {
+        match upload_sample(client, upload_url, upload_size_bytes, streams).await {
+            Ok(sample) => return Ok(sample),
+            Err(error) => {
+                last_error = Some(error);
+                if attempt < attempts {
+                    tokio::time::sleep(retry_delay(attempt)).await;
+                }
+            }
+        }
+    }
+
+    Err(last_error.expect("at least one transfer attempt runs"))
+}
+
+fn retry_delay(attempt: u32) -> Duration {
+    Duration::from_millis(150 * u64::from(attempt))
 }
 
 async fn download_sample(
@@ -1363,6 +1436,7 @@ Reply from 1.1.1.1: bytes=32 time=2ms TTL=59
             upload_size_bytes: None,
             bandwidth_runs: None,
             bandwidth_warmup_runs: None,
+            transfer_attempts: None,
             download_streams: None,
             upload_streams: None,
             target_transfer_duration_ms: None,
@@ -1374,6 +1448,7 @@ Reply from 1.1.1.1: bytes=32 time=2ms TTL=59
         assert_eq!(options.profile, MeasurementProfile::Standard);
         assert_eq!(options.samples, 5);
         assert_eq!(options.bandwidth.warmup_runs, 1);
+        assert_eq!(options.bandwidth.transfer_attempts, 2);
         assert_eq!(options.bandwidth.target_transfer_duration_ms, 2_500);
         assert_eq!(options.bandwidth.max_download_size_bytes, 32_000_000);
         assert_eq!(options.bandwidth.max_upload_size_bytes, 8_000_000);
@@ -1405,6 +1480,7 @@ Reply from 1.1.1.1: bytes=32 time=2ms TTL=59
             upload_size_bytes: Some(2_000_000),
             bandwidth_runs: Some(2),
             bandwidth_warmup_runs: Some(0),
+            transfer_attempts: Some(4),
             download_streams: Some(3),
             upload_streams: Some(2),
             target_transfer_duration_ms: Some(1_500),
@@ -1444,6 +1520,7 @@ Reply from 1.1.1.1: bytes=32 time=2ms TTL=59
             upload_size_bytes: None,
             bandwidth_runs: None,
             bandwidth_warmup_runs: None,
+            transfer_attempts: None,
             download_streams: None,
             upload_streams: None,
             target_transfer_duration_ms: None,
@@ -1479,6 +1556,7 @@ Reply from 1.1.1.1: bytes=32 time=2ms TTL=59
             upload_size_bytes: 1,
             runs: 1,
             warmup_runs: 0,
+            transfer_attempts: 1,
             download_streams: 1,
             upload_streams: 1,
             target_transfer_duration_ms: 1_000,
@@ -1561,6 +1639,7 @@ Reply from 1.1.1.1: bytes=32 time=2ms TTL=59
         assert_eq!(bandwidth.target_transfer_duration_ms, 2_500);
         assert_eq!(bandwidth.bandwidth_elapsed_ms, 0.0);
         assert_eq!(bandwidth.warmup_runs, 0);
+        assert_eq!(bandwidth.transfer_attempts, 1);
     }
 
     #[test]
@@ -1586,6 +1665,7 @@ Reply from 1.1.1.1: bytes=32 time=2ms TTL=59
             upload_size_bytes: None,
             bandwidth_runs: None,
             bandwidth_warmup_runs: None,
+            transfer_attempts: None,
             download_streams: None,
             upload_streams: None,
             target_transfer_duration_ms: None,

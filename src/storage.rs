@@ -650,6 +650,7 @@ mod tests {
                         bandwidth_elapsed_ms: 3_000.0,
                         runs: 1,
                         warmup_runs: 1,
+                        transfer_attempts: 2,
                         download_streams: 2,
                         upload_streams: 2,
                         download_url: "https://speed.cloudflare.com/__down?bytes=4000000"
